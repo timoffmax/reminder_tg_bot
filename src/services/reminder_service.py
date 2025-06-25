@@ -1,0 +1,151 @@
+from datetime import datetime, timedelta
+from typing import List, Optional
+from sqlalchemy.orm import Session
+from src.models.reminder import Reminder, ReminderHistory, ReminderType, ReminderStatus
+from src.database import get_db
+
+class ReminderService:
+    def __init__(self, db: Session):
+        self.db = db
+    
+    def create_reminder(
+        self,
+        user_id: int,
+        chat_id: int,
+        message_text: str,
+        scheduled_time: datetime,
+        reminder_type: ReminderType = ReminderType.ONE_TIME,
+        requires_confirmation: bool = False,
+        tagged_users: List[int] = None,
+        repeat_interval: Optional[str] = None
+    ) -> Reminder:
+        reminder = Reminder(
+            user_id=user_id,
+            chat_id=chat_id,
+            message_text=message_text,
+            scheduled_time=scheduled_time,
+            reminder_type=reminder_type.value,
+            requires_confirmation=requires_confirmation,
+            tagged_users=tagged_users or [],
+            repeat_interval=repeat_interval
+        )
+        
+        self.db.add(reminder)
+        self.db.commit()
+        self.db.refresh(reminder)
+        
+        self._log_action(reminder.id, "created")
+        return reminder
+    
+    def get_active_reminders(self, user_id: int) -> List[Reminder]:
+        return self.db.query(Reminder).filter(
+            Reminder.user_id == user_id,
+            Reminder.status == ReminderStatus.ACTIVE.value
+        ).order_by(Reminder.scheduled_time).all()
+    
+    def get_reminder_by_id(self, reminder_id: int) -> Optional[Reminder]:
+        return self.db.query(Reminder).filter(Reminder.id == reminder_id).first()
+    
+    def get_due_reminders(self) -> List[Reminder]:
+        now = datetime.now()
+        return self.db.query(Reminder).filter(
+            Reminder.scheduled_time <= now,
+            Reminder.status == ReminderStatus.ACTIVE.value
+        ).all()
+    
+    def snooze_reminder(self, reminder_id: int, snooze_minutes: int = 10) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder:
+            return False
+        
+        reminder.scheduled_time += timedelta(minutes=snooze_minutes)
+        reminder.status = ReminderStatus.SNOOZED.value
+        reminder.snooze_count += 1
+        
+        self.db.commit()
+        self._log_action(reminder_id, "snoozed", {"snooze_minutes": snooze_minutes})
+        return True
+    
+    def complete_reminder(self, reminder_id: int) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder:
+            return False
+        
+        if reminder.reminder_type == ReminderType.REPEATING.value:
+            self._reschedule_repeating_reminder(reminder)
+        else:
+            reminder.status = ReminderStatus.COMPLETED.value
+        
+        self.db.commit()
+        self._log_action(reminder_id, "completed")
+        return True
+    
+    def confirm_reminder(self, reminder_id: int) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder or not reminder.requires_confirmation:
+            return False
+        
+        reminder.is_confirmed = True
+        self.db.commit()
+        self._log_action(reminder_id, "confirmed")
+        return True
+    
+    def cancel_reminder(self, reminder_id: int) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder:
+            return False
+        
+        reminder.status = ReminderStatus.CANCELLED.value
+        self.db.commit()
+        self._log_action(reminder_id, "cancelled")
+        return True
+    
+    def get_reminder_history(self, reminder_id: int) -> List[ReminderHistory]:
+        return self.db.query(ReminderHistory).filter(
+            ReminderHistory.reminder_id == reminder_id
+        ).order_by(ReminderHistory.timestamp.desc()).all()
+    
+    def _reschedule_repeating_reminder(self, reminder: Reminder):
+        if reminder.repeat_interval == "daily":
+            reminder.scheduled_time += timedelta(days=1)
+        elif reminder.repeat_interval == "weekly":
+            reminder.scheduled_time += timedelta(weeks=1)
+        elif reminder.repeat_interval == "monthly":
+            reminder.scheduled_time += timedelta(days=30)
+        
+        reminder.status = ReminderStatus.ACTIVE.value
+        reminder.is_confirmed = False
+    
+    def reschedule_reminder(self, reminder_id: int, new_time: datetime) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder:
+            return False
+        
+        old_time = reminder.scheduled_time
+        reminder.scheduled_time = new_time
+        reminder.status = ReminderStatus.ACTIVE.value
+        
+        self.db.commit()
+        self._log_action(reminder_id, "rescheduled", {
+            "old_time": old_time.isoformat(),
+            "new_time": new_time.isoformat()
+        })
+        return True
+    
+    def get_unconfirmed_overdue_reminders(self, minutes_overdue: int = 5) -> List[Reminder]:
+        cutoff_time = datetime.now() - timedelta(minutes=minutes_overdue)
+        return self.db.query(Reminder).filter(
+            Reminder.requires_confirmation == True,
+            Reminder.is_confirmed == False,
+            Reminder.scheduled_time <= cutoff_time,
+            Reminder.status == ReminderStatus.ACTIVE.value
+        ).all()
+    
+    def _log_action(self, reminder_id: int, action: str, details: dict = None):
+        history = ReminderHistory(
+            reminder_id=reminder_id,
+            action=action,
+            details=details or {}
+        )
+        self.db.add(history)
+        self.db.commit()

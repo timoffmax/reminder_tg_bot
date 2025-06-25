@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "reminder-tg-bot"
+version = "0.1.0"
+description = "A Telegram bot for managing reminders"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+python-telegram-bot = "^21.3"
+sqlalchemy = "^2.0.31"
+alembic = "^1.13.2"
+python-dotenv = "^1.0.1"
+apscheduler = "^3.10.4"
+pytz = "^2024.1"
+
+[tool.poetry.dev-dependencies]
+pytest = "^8.3.2"
+black = "^24.4.2"
+flake8 = "^7.1.0"
+mypy = "^1.11.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

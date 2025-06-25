@@ -1,0 +1,34 @@
+# Docker compose with standalone PostgreSQL (for systems without existing PostgreSQL)
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: reminder_user
+      POSTGRES_PASSWORD: reminder_pass
+    ports:
+      - "5433:5432"  # Use different port to avoid conflicts
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reminder_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DATABASE_URL=postgresql://reminder_user:reminder_pass@postgres:5432/reminder_bot
+      - DEFAULT_TIMEZONE=${DEFAULT_TIMEZONE:-UTC}
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

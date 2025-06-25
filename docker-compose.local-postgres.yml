@@ -1,0 +1,12 @@
+# Alternative docker-compose for using existing local PostgreSQL
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    network_mode: "host"  # Use host network to access local PostgreSQL
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/reminder_bot}
+      - DEFAULT_TIMEZONE=${DEFAULT_TIMEZONE:-UTC}
+    restart: unless-stopped
