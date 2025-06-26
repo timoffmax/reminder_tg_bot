@@ -1,5 +1,5 @@
-import psycopg2
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import psycopg
+from psycopg import IsolationLevel
 from sqlalchemy import create_engine, text
 from urllib.parse import urlparse
 import logging
@@ -44,7 +44,7 @@ def create_database_if_not_exists(database_url: str):
         pass
 
 def create_database_if_not_exists_psycopg2(database_url: str):
-    """Alternative method using psycopg2 directly"""
+    """Alternative method using psycopg directly"""
     try:
         parsed_url = urlparse(database_url)
         
@@ -57,34 +57,29 @@ def create_database_if_not_exists_psycopg2(database_url: str):
         logger.info(f"Attempting to create database '{db_name}' if it doesn't exist...")
         
         # Connect to PostgreSQL server (default 'postgres' database)
-        conn = psycopg2.connect(
+        with psycopg.connect(
             host=host,
             port=port,
             user=user,
             password=password,
-            database='postgres'  # Connect to default database
-        )
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        
-        cursor = conn.cursor()
-        
-        # Check if database exists
-        cursor.execute(
-            "SELECT 1 FROM pg_database WHERE datname = %s",
-            (db_name,)
-        )
-        
-        if not cursor.fetchone():
-            logger.info(f"Database '{db_name}' does not exist. Creating...")
-            cursor.execute(f'CREATE DATABASE "{db_name}"')
-            logger.info(f"Database '{db_name}' created successfully!")
-        else:
-            logger.info(f"Database '{db_name}' already exists.")
-        
-        cursor.close()
-        conn.close()
+            dbname='postgres',  # Connect to default database
+            autocommit=True
+        ) as conn:
+            with conn.cursor() as cursor:
+                # Check if database exists
+                cursor.execute(
+                    "SELECT 1 FROM pg_database WHERE datname = %s",
+                    (db_name,)
+                )
+                
+                if not cursor.fetchone():
+                    logger.info(f"Database '{db_name}' does not exist. Creating...")
+                    cursor.execute(f'CREATE DATABASE "{db_name}"')
+                    logger.info(f"Database '{db_name}' created successfully!")
+                else:
+                    logger.info(f"Database '{db_name}' already exists.")
         
     except Exception as e:
-        logger.error(f"Error creating database with psycopg2: {e}")
+        logger.error(f"Error creating database with psycopg: {e}")
         # Fallback to SQLAlchemy method
         create_database_if_not_exists(database_url)
