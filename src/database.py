@@ -10,7 +10,13 @@ logger = logging.getLogger(__name__)
 # Create database if it doesn't exist
 create_database_if_not_exists_psycopg2(DATABASE_URL)
 
-engine = create_engine(DATABASE_URL, echo=False)
+# Convert postgresql:// to postgresql+psycopg:// for psycopg3
+if DATABASE_URL.startswith('postgresql://'):
+    sqlalchemy_url = DATABASE_URL.replace('postgresql://', 'postgresql+psycopg://', 1)
+else:
+    sqlalchemy_url = DATABASE_URL
+
+engine = create_engine(sqlalchemy_url, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
