@@ -112,9 +112,47 @@ class ReminderService:
             reminder.scheduled_time += timedelta(weeks=1)
         elif reminder.repeat_interval == "monthly":
             reminder.scheduled_time += timedelta(days=30)
+        elif reminder.repeat_interval and reminder.repeat_interval.startswith("multi-day:"):
+            # Handle multi-day scheduling (e.g., "multi-day: saturday, sunday")
+            self._reschedule_multi_day_reminder(reminder)
         
         reminder.status = ReminderStatus.ACTIVE.value
         reminder.is_confirmed = False
+    
+    def _reschedule_multi_day_reminder(self, reminder: Reminder):
+        """Schedule next occurrence for multi-day reminders"""
+        # Extract days from repeat_interval (e.g., "multi-day: saturday, sunday")
+        days_str = reminder.repeat_interval.replace("multi-day: ", "")
+        target_days = [day.strip() for day in days_str.split(",")]
+        
+        # Map day names to weekday numbers (Monday=0, Sunday=6)
+        day_map = {
+            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+            'friday': 4, 'saturday': 5, 'sunday': 6
+        }
+        
+        target_weekdays = [day_map[day] for day in target_days if day in day_map]
+        
+        if not target_weekdays:
+            # Fallback to weekly if parsing fails
+            reminder.scheduled_time += timedelta(weeks=1)
+            return
+        
+        current_weekday = reminder.scheduled_time.weekday()
+        next_occurrence = None
+        
+        # Find the next target day
+        for days_ahead in range(1, 8):  # Check next 7 days
+            future_weekday = (current_weekday + days_ahead) % 7
+            if future_weekday in target_weekdays:
+                next_occurrence = reminder.scheduled_time + timedelta(days=days_ahead)
+                break
+        
+        if next_occurrence:
+            reminder.scheduled_time = next_occurrence
+        else:
+            # Fallback - schedule for next week
+            reminder.scheduled_time += timedelta(weeks=1)
     
     def reschedule_reminder(self, reminder_id: int, new_time: datetime) -> bool:
         reminder = self.get_reminder_by_id(reminder_id)

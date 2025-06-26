@@ -12,7 +12,8 @@ from src.utils.timezone_utils import convert_to_user_timezone
 def escape_markdown(text: str) -> str:
     """Escape special characters for Markdown parse mode"""
     # Only escape characters that actually need escaping in Telegram MarkdownV2
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '=', '|', '{', '}', '.', '!']
+    # Excluding '!' from escaping to avoid showing backslashes in user messages
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '=', '|', '{', '}', '.']
     for char in special_chars:
         text = text.replace(char, f'\\{char}')
     return text

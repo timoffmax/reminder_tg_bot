@@ -7,11 +7,53 @@ from src.services.reminder_service import ReminderService
 from src.services.user_service import UserService
 from src.models.reminder import ReminderType
 from src.utils.timezone_utils import parse_time_input, convert_to_user_timezone
+from datetime import timedelta
+
+def calculate_next_occurrence(reminder) -> datetime:
+    """Calculate the next occurrence for a repeating reminder"""
+    if reminder.reminder_type != "repeating" or not reminder.repeat_interval:
+        return None
+    
+    next_time = reminder.scheduled_time
+    if reminder.repeat_interval == "daily":
+        next_time += timedelta(days=1)
+    elif reminder.repeat_interval == "weekly":
+        next_time += timedelta(weeks=1)
+    elif reminder.repeat_interval == "monthly":
+        next_time += timedelta(days=30)
+    elif reminder.repeat_interval and reminder.repeat_interval.startswith("multi-day:"):
+        # Handle multi-day scheduling
+        days_str = reminder.repeat_interval.replace("multi-day: ", "")
+        target_days = [day.strip() for day in days_str.split(",")]
+        
+        day_map = {
+            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+            'friday': 4, 'saturday': 5, 'sunday': 6
+        }
+        
+        target_weekdays = [day_map[day] for day in target_days if day in day_map]
+        
+        if target_weekdays:
+            current_weekday = next_time.weekday()
+            # Find the next target day
+            for days_ahead in range(1, 8):
+                future_weekday = (current_weekday + days_ahead) % 7
+                if future_weekday in target_weekdays:
+                    next_time += timedelta(days=days_ahead)
+                    break
+            else:
+                # Fallback to next week
+                next_time += timedelta(weeks=1)
+        else:
+            next_time += timedelta(weeks=1)
+    
+    return next_time
 
 def escape_markdown(text: str) -> str:
     """Escape special characters for Markdown parse mode"""
     # Only escape characters that actually need escaping in Telegram MarkdownV2
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '=', '|', '{', '}', '.', '!']
+    # Excluding '!' from escaping to avoid showing backslashes in user messages
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '=', '|', '{', '}', '.']
     for char in special_chars:
         text = text.replace(char, f'\\{char}')
     return text
@@ -38,7 +80,26 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reminder_type = ReminderType.ONE_TIME
         repeat_interval = None
         
-        if "daily" in text.lower():
+        # Check for "every" keyword - automatically makes it repeating
+        if "every" in text.lower():
+            reminder_type = ReminderType.REPEATING
+            text = re.sub(r'\bevery\b', '', text, flags=re.IGNORECASE).strip()
+            
+            # Check for multi-day patterns like "saturday and sunday"
+            weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            found_days = [day for day in weekdays if day in text.lower()]
+            
+            if len(found_days) > 1:
+                repeat_interval = "multi-day: " + ", ".join(found_days)
+                # Remove all day names from text
+                for day in found_days:
+                    text = re.sub(rf'\b{day}\b', '', text, flags=re.IGNORECASE)
+                text = re.sub(r'\band\b', '', text, flags=re.IGNORECASE).strip()
+            elif len(found_days) == 1:
+                repeat_interval = "weekly"
+            else:
+                repeat_interval = "daily"  # Default if no specific days mentioned
+        elif "daily" in text.lower():
             reminder_type = ReminderType.REPEATING
             repeat_interval = "daily"
             text = re.sub(r'\bdaily\b', '', text, flags=re.IGNORECASE).strip()
@@ -131,6 +192,13 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"{status_emoji} {escape_markdown(reminder.message_text)}\n"
                     f"   📅 {user_time.strftime('%Y-%m-%d %H:%M')} ({escape_markdown(user_timezone)})\n"
                 )
+                
+                if reminder.reminder_type == "repeating" and reminder.repeat_interval:
+                    response += f"   🔄 Repeats: {reminder.repeat_interval}\n"
+                    next_occurrence = calculate_next_occurrence(reminder)
+                    if next_occurrence:
+                        next_user_time = convert_to_user_timezone(next_occurrence, user_timezone)
+                        response += f"   ⏭️ Next: {next_user_time.strftime('%Y-%m-%d %H:%M')}\n"
                 
                 if reminder.snooze_count > 0:
                     response += f"   😴 Snoozed {reminder.snooze_count} time(s)\n"
