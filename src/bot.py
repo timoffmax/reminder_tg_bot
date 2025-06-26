@@ -37,16 +37,18 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             except:
                 pass
 
-def main():
-    init_db()
-    
+async def post_init(application: Application) -> None:
+    """Initialize scheduler after the application starts"""
     scheduler = AsyncIOScheduler()
     scheduler.start()
     
-    application = Application.builder().token(BOT_TOKEN).build()
-    
     scheduler_service = SchedulerService(scheduler, application.bot)
     application.bot_data['scheduler_service'] = scheduler_service
+
+def main():
+    init_db()
+    
+    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     
     # Basic commands
     application.add_handler(CommandHandler("start", start))
