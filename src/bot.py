@@ -1,5 +1,5 @@
 import logging
-from telegram import Update
+from telegram import Update, BotCommand, MenuButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.config import BOT_TOKEN
@@ -37,6 +37,25 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             except:
                 pass
 
+async def setup_bot_menu(bot):
+    """Set up bot commands and menu button"""
+    commands = [
+        BotCommand("start", "Start the bot and get welcome message"),
+        BotCommand("menu", "Show main menu"),
+        BotCommand("remind", "Create a new reminder"),
+        BotCommand("reminders", "List all your reminders"),
+        BotCommand("timezone", "Set your timezone"),
+        BotCommand("help", "Show help information"),
+    ]
+    
+    await bot.set_my_commands(commands)
+    
+    # Set menu button that opens the main menu
+    menu_button = MenuButton.commands()
+    await bot.set_chat_menu_button(menu_button=menu_button)
+    
+    logger.info("Bot menu and commands configured")
+
 async def post_init(application: Application) -> None:
     """Initialize scheduler after the application starts"""
     scheduler = AsyncIOScheduler()
@@ -46,6 +65,9 @@ async def post_init(application: Application) -> None:
     # Start the scheduler
     scheduler.start()
     logger.info("Scheduler started")
+    
+    # Set up bot commands and menu button
+    await setup_bot_menu(application.bot)
 
 def main():
     init_db()
