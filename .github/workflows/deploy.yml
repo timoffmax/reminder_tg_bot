@@ -2,7 +2,7 @@ name: Deploy Reminder Bot to Production
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
     paths:
       - 'src/**'
       - 'requirements.txt'
@@ -48,7 +48,7 @@ jobs:
         ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
           set -e
           
-          SERVICE_NAME="reminder-tg-bot"
+          SERVICE_NAME="reminder-bot"
           cd ${{ secrets.PROJECT_PATH }}
           
           echo "🤖 Deploying Reminder Telegram Bot..."
@@ -73,7 +73,7 @@ jobs:
           if [ "${{ inputs.restart_only }}" != "true" ]; then
             echo "📥 Pulling latest changes..."
             git fetch origin
-            git reset --hard origin/main
+            git reset --hard origin/master
             
             # Update Python dependencies
             echo "📦 Updating Python dependencies..."
@@ -124,7 +124,7 @@ jobs:
       run: |
         ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
           cd ${{ secrets.PROJECT_PATH }}
-          SERVICE_NAME="reminder-tg-bot"
+          SERVICE_NAME="reminder-bot"
           
           echo "🔍 Verifying bot deployment..."
           

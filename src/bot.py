@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, BotCommand, MenuButton
+from telegram import Update, BotCommand, MenuButtonCommands
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.config import BOT_TOKEN
@@ -50,8 +50,8 @@ async def setup_bot_menu(bot):
     
     await bot.set_my_commands(commands)
     
-    # Set menu button that opens the main menu
-    menu_button = MenuButton.commands()
+    # Set menu button that opens the commands menu
+    menu_button = MenuButtonCommands()
     await bot.set_chat_menu_button(menu_button=menu_button)
     
     logger.info("Bot menu and commands configured")
