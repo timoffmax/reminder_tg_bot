@@ -10,12 +10,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Default values
-APP_DIR="/var/www/reminder_bot"
+# Default values - will be overridden by current directory
+APP_DIR="/var/www/reminder_tg_bot"
 APP_USER="reminder_bot"
 DB_NAME="reminder_bot"
 DB_USER="reminder_bot"
-PYTHON_VERSION="python3.11"
+PYTHON_VERSION="python3"
 
 # Functions
 print_header() {
@@ -147,20 +147,44 @@ main() {
         apt-get update --allow-releaseinfo-change --allow-unauthenticated
     }
     
-    # Check Python version availability
-    if ! apt-cache show $PYTHON_VERSION &>/dev/null; then
-        print_warning "$PYTHON_VERSION not available, using python3"
+    # Detect available Python version
+    if command -v python3.13 &>/dev/null; then
+        PYTHON_VERSION="python3.13"
+        PYTHON_VENV="python3.13-venv"
+    elif command -v python3.12 &>/dev/null; then
+        PYTHON_VERSION="python3.12"
+        PYTHON_VENV="python3.12-venv"
+    elif command -v python3.11 &>/dev/null; then
+        PYTHON_VERSION="python3.11"
+        PYTHON_VENV="python3.11-venv"
+    elif command -v python3.10 &>/dev/null; then
+        PYTHON_VERSION="python3.10"
+        PYTHON_VENV="python3.10-venv"
+    elif command -v python3.9 &>/dev/null; then
+        PYTHON_VERSION="python3.9"
+        PYTHON_VENV="python3.9-venv"
+    else
         PYTHON_VERSION="python3"
+        PYTHON_VENV="python3-venv"
     fi
     
+    print_warning "Using Python version: $PYTHON_VERSION"
+    
+    # Install base packages
     apt install -y \
-        $PYTHON_VERSION \
-        ${PYTHON_VERSION}-venv \
         python3-pip \
         postgresql \
         postgresql-contrib \
         git \
         rsync
+    
+    # Try to install Python venv package if available
+    if apt-cache show $PYTHON_VENV &>/dev/null; then
+        apt install -y $PYTHON_VENV || print_warning "Could not install $PYTHON_VENV via apt, will use built-in venv"
+    else
+        print_warning "$PYTHON_VENV not available in apt, will use built-in venv module"
+    fi
+    
     print_success "System dependencies installed"
     
     # Step 2: Create user
@@ -195,29 +219,12 @@ EOF
     # Step 4: Application setup
     print_header "Step 4: Setting up Application"
     
-    # Copy current directory to target location
-    if [ "$CURRENT_DIR" != "$APP_DIR" ]; then
-        print_warning "Copying files from $CURRENT_DIR to $APP_DIR..."
-        
-        # Create target directory if it doesn't exist
-        if [ ! -d "$APP_DIR" ]; then
-            mkdir -p "$APP_DIR"
-        fi
-        
-        # Copy all files except .git to preserve repo state
-        if command -v rsync &> /dev/null; then
-            rsync -av --exclude='.git' "$CURRENT_DIR/" "$APP_DIR/"
-        else
-            # Fallback to cp if rsync not available
-            cp -r "$CURRENT_DIR"/* "$APP_DIR/" 2>/dev/null || true
-            cp -r "$CURRENT_DIR"/.[^.]* "$APP_DIR/" 2>/dev/null || true
-        fi
-        chown -R "$APP_USER:$APP_USER" "$APP_DIR"
-        print_success "Files copied to $APP_DIR"
-    else
-        print_warning "Already in target directory, adjusting ownership..."
-        chown -R "$APP_USER:$APP_USER" "$APP_DIR"
-    fi
+    # Use current directory as installation directory
+    APP_DIR="$CURRENT_DIR"
+    print_warning "Using current directory as installation directory: $APP_DIR"
+    
+    # Adjust ownership of current directory
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     
     # Check if source code exists
     if [ ! -f "$APP_DIR/requirements.txt" ]; then
