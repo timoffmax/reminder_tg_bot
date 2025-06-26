@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 # Default values
 APP_DIR="/var/www/reminder_bot"
 APP_USER="reminder_bot"
-DB_NAME="reminder_bot_db"
+DB_NAME="reminder_bot"
 DB_USER="reminder_bot"
 SERVICE_NAME="reminder-bot"
 
