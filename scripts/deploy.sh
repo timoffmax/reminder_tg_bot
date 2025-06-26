@@ -9,10 +9,10 @@ echo "Starting deployment..."
 sudo -u reminder_bot git pull origin master
 
 # Update dependencies
-sudo -u reminder_bot /opt/reminder_bot/venv/bin/pip install -r requirements.txt
+sudo -u reminder_bot /var/www/reminder_bot/venv/bin/pip install -r requirements.txt
 
 # Run database migrations
-sudo -u reminder_bot /opt/reminder_bot/venv/bin/python setup_db.py
+sudo -u reminder_bot /var/www/reminder_bot/venv/bin/python setup_db.py
 
 # Restart service
 sudo systemctl restart reminder-bot

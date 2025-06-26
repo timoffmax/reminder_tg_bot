@@ -7,11 +7,11 @@ Requires=postgresql.service
 Type=simple
 User=reminder_bot
 Group=reminder_bot
-WorkingDirectory=/opt/reminder_bot
-Environment="PYTHONPATH=/opt/reminder_bot"
-Environment="PATH=/opt/reminder_bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStartPre=/opt/reminder_bot/venv/bin/python /opt/reminder_bot/setup_db.py
-ExecStart=/opt/reminder_bot/venv/bin/python -m src.bot
+WorkingDirectory=/var/www/reminder_bot
+Environment="PYTHONPATH=/var/www/reminder_bot"
+Environment="PATH=/var/www/reminder_bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStartPre=/var/www/reminder_bot/venv/bin/python /var/www/reminder_bot/setup_db.py
+ExecStart=/var/www/reminder_bot/venv/bin/python -m src.bot
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -23,7 +23,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/reminder_bot
+ReadWritePaths=/var/www/reminder_bot
 
 [Install]
 WantedBy=multi-user.target

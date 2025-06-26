@@ -3,7 +3,7 @@
 
 set -e
 
-BACKUP_DIR="/opt/reminder_bot/backups"
+BACKUP_DIR="/var/www/reminder_bot/backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/reminder_bot_backup_$TIMESTAMP.sql"
 
@@ -11,7 +11,7 @@ BACKUP_FILE="$BACKUP_DIR/reminder_bot_backup_$TIMESTAMP.sql"
 mkdir -p $BACKUP_DIR
 
 # Load environment variables
-source /opt/reminder_bot/.env
+source /var/www/reminder_bot/.env
 
 # Create backup
 pg_dump $DATABASE_URL > $BACKUP_FILE
