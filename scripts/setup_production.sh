@@ -108,17 +108,18 @@ main() {
     read -p "Enter default timezone (default: UTC): " TIMEZONE
     TIMEZONE=${TIMEZONE:-UTC}
     
-    # Repository URL
-    read -p "Enter your git repository URL (or press Enter to skip): " REPO_URL
+    # Current directory setup
+    CURRENT_DIR=$(pwd)
+    echo "Using current directory: $CURRENT_DIR"
     
     # Summary
     print_header "Configuration Summary"
+    echo "Source directory: $CURRENT_DIR"
     echo "Installation directory: $APP_DIR"
     echo "System user: $APP_USER"
     echo "Database name: $DB_NAME"
     echo "Database user: $DB_USER"
     echo "Default timezone: $TIMEZONE"
-    echo "Repository: ${REPO_URL:-Manual upload required}"
     echo
     
     if ! confirm "Proceed with installation?"; then
@@ -129,8 +130,22 @@ main() {
     # Step 1: System dependencies
     print_header "Step 1: Installing System Dependencies"
     
-    # Fix potential repository issues
-    apt-get update --allow-releaseinfo-change 2>/dev/null || apt update
+    # Fix repository issues first
+    print_warning "Fixing repository configuration..."
+    
+    # Remove problematic repository files
+    if [ -f /etc/apt/sources.list.d/buster-backports.list ]; then
+        rm -f /etc/apt/sources.list.d/buster-backports.list
+    fi
+    
+    # Clean up sources.list to remove buster-backports
+    sed -i '/buster-backports/d' /etc/apt/sources.list 2>/dev/null || true
+    
+    # Update with fixed repositories
+    apt-get update 2>/dev/null || {
+        print_warning "Repository update failed, trying alternative approach..."
+        apt-get update --allow-releaseinfo-change --allow-unauthenticated
+    }
     
     # Check Python version availability
     if ! apt-cache show $PYTHON_VERSION &>/dev/null; then
@@ -144,7 +159,8 @@ main() {
         python3-pip \
         postgresql \
         postgresql-contrib \
-        git
+        git \
+        rsync
     print_success "System dependencies installed"
     
     # Step 2: Create user
@@ -179,28 +195,33 @@ EOF
     # Step 4: Application setup
     print_header "Step 4: Setting up Application"
     
-    # Clone or create directory
-    if [ -n "$REPO_URL" ]; then
-        if [ -d "$APP_DIR/.git" ]; then
-            print_warning "Repository already exists, pulling latest changes"
-            sudo -u "$APP_USER" bash -c "cd $APP_DIR && git pull"
-        else
-            print_warning "Cloning repository..."
-            rm -rf "$APP_DIR"
-            sudo -u "$APP_USER" git clone "$REPO_URL" "$APP_DIR"
-        fi
-    else
+    # Copy current directory to target location
+    if [ "$CURRENT_DIR" != "$APP_DIR" ]; then
+        print_warning "Copying files from $CURRENT_DIR to $APP_DIR..."
+        
+        # Create target directory if it doesn't exist
         if [ ! -d "$APP_DIR" ]; then
             mkdir -p "$APP_DIR"
-            chown "$APP_USER:$APP_USER" "$APP_DIR"
-            print_warning "Created $APP_DIR - please upload your code manually"
         fi
+        
+        # Copy all files except .git to preserve repo state
+        if command -v rsync &> /dev/null; then
+            rsync -av --exclude='.git' "$CURRENT_DIR/" "$APP_DIR/"
+        else
+            # Fallback to cp if rsync not available
+            cp -r "$CURRENT_DIR"/* "$APP_DIR/" 2>/dev/null || true
+            cp -r "$CURRENT_DIR"/.[^.]* "$APP_DIR/" 2>/dev/null || true
+        fi
+        chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+        print_success "Files copied to $APP_DIR"
+    else
+        print_warning "Already in target directory, adjusting ownership..."
+        chown -R "$APP_USER:$APP_USER" "$APP_DIR"
     fi
     
     # Check if source code exists
     if [ ! -f "$APP_DIR/requirements.txt" ]; then
         print_error "No requirements.txt found in $APP_DIR"
-        print_warning "Please upload your code to $APP_DIR and run this script again"
         exit 1
     fi
     
