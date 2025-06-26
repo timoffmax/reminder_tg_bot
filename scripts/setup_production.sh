@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 # Default values
 APP_DIR="/var/www/reminder_bot"
 APP_USER="reminder_bot"
-DB_NAME="reminder_bot_db"
+DB_NAME="reminder_bot"
 DB_USER="reminder_bot"
 PYTHON_VERSION="python3.11"
 
@@ -128,16 +128,23 @@ main() {
     
     # Step 1: System dependencies
     print_header "Step 1: Installing System Dependencies"
-    apt update
+    
+    # Fix potential repository issues
+    apt-get update --allow-releaseinfo-change 2>/dev/null || apt update
+    
+    # Check Python version availability
+    if ! apt-cache show $PYTHON_VERSION &>/dev/null; then
+        print_warning "$PYTHON_VERSION not available, using python3"
+        PYTHON_VERSION="python3"
+    fi
+    
     apt install -y \
         $PYTHON_VERSION \
         ${PYTHON_VERSION}-venv \
         python3-pip \
         postgresql \
         postgresql-contrib \
-        git \
-        supervisor \
-        nginx
+        git
     print_success "System dependencies installed"
     
     # Step 2: Create user
