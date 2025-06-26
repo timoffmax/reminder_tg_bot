@@ -1,0 +1,175 @@
+name: Deploy Reminder Bot to Production
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'requirements.txt'
+      - 'pyproject.toml'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'setup_db.py'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment even without changes'
+        required: false
+        default: 'false'
+        type: boolean
+      restart_only:
+        description: 'Only restart the bot service without updating code'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+    
+    - name: Test SSH connection
+      run: |
+        ssh -o ConnectTimeout=10 ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "echo 'SSH connection successful'"
+    
+    - name: Deploy Reminder Bot
+      run: |
+        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+          set -e
+          
+          SERVICE_NAME="reminder-tg-bot"
+          cd ${{ secrets.PROJECT_PATH }}
+          
+          echo "🤖 Deploying Reminder Telegram Bot..."
+          
+          # Stop the bot service if running
+          if systemctl is-active --quiet $SERVICE_NAME; then
+            echo "⏹️  Stopping bot service..."
+            sudo systemctl stop $SERVICE_NAME
+          fi
+          
+          # Backup current version
+          if [ -d "backup" ]; then
+            rm -rf backup.old
+            mv backup backup.old
+          fi
+          mkdir -p backup
+          cp -r src/ backup/ 2>/dev/null || true
+          cp -r *.py backup/ 2>/dev/null || true
+          cp requirements.txt backup/ 2>/dev/null || true
+          
+          # Pull latest changes (skip if restart_only)
+          if [ "${{ inputs.restart_only }}" != "true" ]; then
+            echo "📥 Pulling latest changes..."
+            git fetch origin
+            git reset --hard origin/main
+            
+            # Update Python dependencies
+            echo "📦 Updating Python dependencies..."
+            if [ -f requirements.txt ]; then
+              # Use virtual environment if it exists
+              if [ -d "venv" ]; then
+                source venv/bin/activate
+                pip install -r requirements.txt --upgrade
+                deactivate
+              else
+                python3 -m pip install --user -r requirements.txt --upgrade
+              fi
+            fi
+            
+            # Set up database if needed
+            if [ -f setup_db.py ]; then
+              echo "🗄️  Setting up database..."
+              if [ -d "venv" ]; then
+                source venv/bin/activate
+                python setup_db.py
+                deactivate
+              else
+                python3 setup_db.py
+              fi
+            fi
+          else
+            echo "⚡ Restart-only mode: skipping code update"
+          fi
+          
+          # Set permissions for tools (if they exist)
+          chmod +x bin/commit 2>/dev/null || true
+          chmod +x tools/git/commit 2>/dev/null || true
+          
+          # Start the bot service
+          echo "🚀 Starting bot service..."
+          sudo systemctl start $SERVICE_NAME
+          
+          # Wait a bit for service to start
+          sleep 3
+          
+          # Enable service to start on boot
+          sudo systemctl enable $SERVICE_NAME
+          
+          echo "✅ Bot deployment completed successfully!"
+        EOF
+    
+    - name: Verify bot deployment
+      run: |
+        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+          cd ${{ secrets.PROJECT_PATH }}
+          SERVICE_NAME="reminder-tg-bot"
+          
+          echo "🔍 Verifying bot deployment..."
+          
+          # Check service status
+          if systemctl is-active --quiet $SERVICE_NAME; then
+            echo "✅ Bot service is running"
+            sudo systemctl status $SERVICE_NAME --no-pager -l
+          else
+            echo "❌ Bot service is not running"
+            echo "📋 Service logs:"
+            sudo journalctl -u $SERVICE_NAME --no-pager -n 20
+            exit 1
+          fi
+          
+          # Check if bot process is running
+          if pgrep -f "python.*bot.py" > /dev/null; then
+            echo "✅ Bot process is active"
+          else
+            echo "⚠️  Bot process not found, checking service logs..."
+            sudo journalctl -u $SERVICE_NAME --no-pager -n 10
+          fi
+          
+          # Test database connection (if setup_db.py exists)
+          if [ -f setup_db.py ]; then
+            echo "🔍 Testing database connection..."
+            if [ -d "venv" ]; then
+              source venv/bin/activate
+              python -c "from src.database import init_db; init_db(); print('✅ Database connection successful')" 2>/dev/null || echo "⚠️  Database test failed"
+              deactivate
+            else
+              python3 -c "from src.database import init_db; init_db(); print('✅ Database connection successful')" 2>/dev/null || echo "⚠️  Database test failed"
+            fi
+          fi
+          
+          echo "🎉 Bot verification completed!"
+        EOF
+    
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "❌ Deployment failed! Check the logs above for details."
+        # You can add notification integrations here (Slack, Discord, etc.)
+    
+    - name: Notify on success
+      if: success()
+      run: |
+        echo "🎉 Deployment successful! Your reminder bot is updated."
+        # You can add notification integrations here (Slack, Discord, etc.)

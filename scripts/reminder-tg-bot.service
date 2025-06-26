@@ -1,0 +1,32 @@
+[Unit]
+Description=Reminder Telegram Bot
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=%REPLACE_USER%
+Group=%REPLACE_USER%
+WorkingDirectory=%REPLACE_PROJECT_PATH%
+Environment=PATH=%REPLACE_PROJECT_PATH%/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=%REPLACE_PROJECT_PATH%/src
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%REPLACE_PYTHON_PATH% %REPLACE_PROJECT_PATH%/src/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reminder-tg-bot
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%REPLACE_PROJECT_PATH%
+
+# Environment file for sensitive configuration
+EnvironmentFile=-%REPLACE_PROJECT_PATH%/.env
+
+[Install]
+WantedBy=multi-user.target
