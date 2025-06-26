@@ -175,6 +175,9 @@ main() {
         python3-pip \
         postgresql \
         postgresql-contrib \
+        libpq-dev \
+        python3-dev \
+        build-essential \
         git \
         rsync
     
