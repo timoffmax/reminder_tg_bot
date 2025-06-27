@@ -259,7 +259,11 @@ What would you like to do?
             success = reminder_service.cancel_reminder(reminder_id)
         
         if success:
-            await query.edit_message_text("❌ Reminder cancelled.")
+            # Show updated reminder list after cancellation
+            await query.answer("❌ Reminder cancelled!")
+            # Import the function dynamically to avoid circular import
+            from .reminder_handlers import list_reminders
+            await list_reminders(update, context)
         else:
             await query.edit_message_text("❌ Reminder not found.")
     

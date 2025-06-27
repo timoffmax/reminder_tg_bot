@@ -178,6 +178,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_timezone = user_service.get_user_timezone(user_id)
         
         response = "*Your Active Reminders:*\n\n"
+        keyboard = []
         
         if not reminders:
             response = "You have no active reminders."
@@ -206,12 +207,16 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if reminder.tagged_users:
                     response += f"   👥 Tagged: {escape_markdown(' '.join(reminder.tagged_users))}\n"
                 
+                # Add cancel button for each reminder
+                keyboard.append([InlineKeyboardButton(f"❌ Cancel: {reminder.message_text[:20]}{'...' if len(reminder.message_text) > 20 else ''}", callback_data=f"cancel_{reminder.id}")])
+                
                 response += "\n"
         
-        keyboard = [
+        # Add refresh and back buttons
+        keyboard.extend([
             [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_reminders")],
             [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-        ]
+        ])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         # Handle both message and callback query
