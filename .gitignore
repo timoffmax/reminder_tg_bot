@@ -26,3 +26,6 @@ ENV/
 
 # Poetry
 poetry.lock
+
+# Deployment config (contains server details)
+bin/deploy.conf

@@ -1,0 +1,80 @@
+#!/bin/bash
+
+# Test SSH connection for Reminder Bot deployment
+# ==============================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/deploy.conf"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Load config
+if [ ! -f "$CONFIG_FILE" ]; then
+    log_error "Config file not found: $CONFIG_FILE"
+    echo ""
+    echo "Create the config file by copying the sample:"
+    echo "  cp $SCRIPT_DIR/deploy.conf.sample $CONFIG_FILE"
+    echo ""
+    echo "Then edit it with your server details:"
+    echo "  nano $CONFIG_FILE"
+    exit 1
+fi
+source "$CONFIG_FILE"
+
+echo "🔑 Testing SSH Connection"
+echo "========================"
+
+log_info "SSH Key: $SERVER_SSH_KEY"
+log_info "Server: $SERVER_USER@$SERVER_IP"
+
+# Check if SSH key exists
+if [ ! -f "$SERVER_SSH_KEY" ]; then
+    log_error "SSH private key not found: $SERVER_SSH_KEY"
+    exit 1
+fi
+
+# Check SSH key permissions
+KEY_PERMS=$(stat -c "%a" "$SERVER_SSH_KEY")
+if [ "$KEY_PERMS" != "600" ]; then
+    log_error "SSH key has wrong permissions: $KEY_PERMS (should be 600)"
+    echo "Fix with: chmod 600 $SERVER_SSH_KEY"
+    exit 1
+fi
+
+log_info "SSH key exists and has correct permissions (600)"
+
+# Test SSH connection
+log_info "Testing SSH connection..."
+if ssh -i "$SERVER_SSH_KEY" -o ConnectTimeout=10 -o BatchMode=yes "$SERVER_USER@$SERVER_IP" "echo 'SSH connection successful'"; then
+    log_success "SSH connection working!"
+    
+    log_info "Server details:"
+    ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "echo 'Hostname: $(hostname)'; echo 'User: $(whoami)'; echo 'Working directory: $(pwd)'"
+    
+else
+    log_error "SSH connection failed!"
+    echo ""
+    echo "Troubleshooting steps:"
+    echo "1. Make sure the public key is added to the server:"
+    echo "   cat $SERVER_SSH_KEY.pub"
+    echo ""
+    echo "2. On the server, add the public key to authorized_keys:"
+    echo "   ssh $SERVER_USER@$SERVER_IP"
+    echo "   mkdir -p ~/.ssh"
+    echo "   echo 'YOUR_PUBLIC_KEY' >> ~/.ssh/authorized_keys"
+    echo "   chmod 600 ~/.ssh/authorized_keys"
+    echo "   chmod 700 ~/.ssh"
+    echo ""
+    echo "3. Check server SSH configuration allows key authentication"
+    exit 1
+fi
