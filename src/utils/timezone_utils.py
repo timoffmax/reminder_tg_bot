@@ -59,6 +59,26 @@ def parse_time_input(time_str: str, user_timezone: str) -> Optional[datetime]:
         
         return convert_to_utc(target_time)
     
+    # Try time format with AM/PM (HH:MM AM/PM)
+    am_pm_match = re.match(r'^(?:at\s+)?(\d{1,2}):(\d{2})\s*(am|pm)$', time_str.lower())
+    if am_pm_match:
+        hour = int(am_pm_match.group(1))
+        minute = int(am_pm_match.group(2))
+        am_pm = am_pm_match.group(3)
+        
+        # Convert to 24-hour format
+        if am_pm == 'pm' and hour != 12:
+            hour += 12
+        elif am_pm == 'am' and hour == 12:
+            hour = 0
+        
+        target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        
+        if target_time <= now:
+            target_time += timedelta(days=1)
+        
+        return convert_to_utc(target_time)
+    
     # Try relative time patterns (2h, 30m, etc.)
     time_patterns = {
         r'(\d+)\s*(?:minute|min|m)s?': lambda m: now + timedelta(minutes=int(m.group(1))),
@@ -74,7 +94,8 @@ def parse_time_input(time_str: str, user_timezone: str) -> Optional[datetime]:
             return convert_to_utc(target_time)
     
     # Try monthly patterns like "25th at 10AM" or "15th 14:00"
-    monthly_pattern = r'(\d{1,2})(?:st|nd|rd|th)?\s*(?:at\s*)?(\d{1,2}):?(\d{2})?\s*(am|pm)?'
+    # Improved pattern to avoid matching regular time strings
+    monthly_pattern = r'(\d{1,2})(?:st|nd|rd|th)\s*(?:at\s*)?(\d{1,2}):?(\d{2})?\s*(am|pm)?'
     monthly_match = re.search(monthly_pattern, time_str.lower())
     if monthly_match:
         day = int(monthly_match.group(1))
@@ -203,8 +224,15 @@ def parse_recurring_pattern(text: str) -> tuple[str, Optional[str]]:
     - "every day 9AM" -> ("9AM", "daily") 
     - "every week monday 10AM" -> ("monday 10AM", "weekly")
     - "every saturday and sunday 11AM" -> ("11AM", "multi-day: saturday, sunday")
+    - "everyday at 10:20 AM" -> ("at 10:20 AM", "daily")
     """
     text_lower = text.lower()
+    original_text = text
+    
+    # Handle compound words like "everyday" first
+    if "everyday" in text_lower:
+        cleaned_text = re.sub(r'\beveryday\b', '', text, flags=re.IGNORECASE).strip()
+        return (cleaned_text, "daily")
     
     # Check for "every" keyword
     if "every" in text_lower:
