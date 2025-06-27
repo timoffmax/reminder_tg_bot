@@ -38,6 +38,7 @@ def parse_time_input(time_str: str, user_timezone: str) -> Optional[datetime]:
     - Natural language: "tomorrow at 3pm", "next monday at 10am"
     - Date formats: "12.07.2025 14:00", "12/7/25 2PM", "July 12 at 2:30 PM"
     - ISO format: "2025-07-12T14:00:00"
+    - Monthly patterns: "25th at 10AM", "15th 14:00"
     """
     from datetime import datetime, timedelta
     
@@ -71,6 +72,43 @@ def parse_time_input(time_str: str, user_timezone: str) -> Optional[datetime]:
         if match:
             target_time = calc_func(match)
             return convert_to_utc(target_time)
+    
+    # Try monthly patterns like "25th at 10AM" or "15th 14:00"
+    monthly_pattern = r'(\d{1,2})(?:st|nd|rd|th)?\s*(?:at\s*)?(\d{1,2}):?(\d{2})?\s*(am|pm)?'
+    monthly_match = re.search(monthly_pattern, time_str.lower())
+    if monthly_match:
+        day = int(monthly_match.group(1))
+        hour = int(monthly_match.group(2))
+        minute = int(monthly_match.group(3) or 0)
+        am_pm = monthly_match.group(4)
+        
+        # Convert to 24-hour format if needed
+        if am_pm:
+            if am_pm.lower() == 'pm' and hour != 12:
+                hour += 12
+            elif am_pm.lower() == 'am' and hour == 12:
+                hour = 0
+        
+        # Validate day and time
+        if 1 <= day <= 31 and 0 <= hour <= 23 and 0 <= minute <= 59:
+            try:
+                # Try current month first
+                target_time = now.replace(day=day, hour=hour, minute=minute, second=0, microsecond=0)
+                
+                # If the date has already passed this month, use next month
+                if target_time <= now:
+                    target_time = target_time + relativedelta(months=1)
+                
+                return convert_to_utc(target_time)
+            except ValueError:
+                # Invalid day for current month, try next month
+                try:
+                    next_month = now + relativedelta(months=1)
+                    target_time = next_month.replace(day=day, hour=hour, minute=minute, second=0, microsecond=0)
+                    return convert_to_utc(target_time)
+                except ValueError:
+                    # Invalid day for next month too, skip this parsing
+                    pass
     
     # Try natural language and various date formats using dateutil
     try:
@@ -155,6 +193,66 @@ def parse_time_input(time_str: str, user_timezone: str) -> Optional[datetime]:
     except (ValueError, parser.ParserError):
         # If all parsing attempts fail
         return None
+
+def parse_recurring_pattern(text: str) -> tuple[str, Optional[str]]:
+    """
+    Parse text for recurring patterns and return (cleaned_text, repeat_interval)
+    
+    Detects patterns like:
+    - "every month 25th at 10AM" -> ("25th at 10AM", "monthly")
+    - "every day 9AM" -> ("9AM", "daily") 
+    - "every week monday 10AM" -> ("monday 10AM", "weekly")
+    - "every saturday and sunday 11AM" -> ("11AM", "multi-day: saturday, sunday")
+    """
+    text_lower = text.lower()
+    
+    # Check for "every" keyword
+    if "every" in text_lower:
+        # Remove "every" from text
+        cleaned_text = re.sub(r'\bevery\b', '', text, flags=re.IGNORECASE).strip()
+        
+        # Check for monthly patterns
+        if "month" in text_lower:
+            cleaned_text = re.sub(r'\bmonth\b', '', cleaned_text, flags=re.IGNORECASE).strip()
+            return (cleaned_text, "monthly")
+        
+        # Check for multi-day patterns like "saturday and sunday"
+        weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        found_days = [day for day in weekdays if day in text_lower]
+        
+        if len(found_days) > 1:
+            repeat_interval = "multi-day: " + ", ".join(found_days)
+            # Remove all day names from text
+            for day in found_days:
+                cleaned_text = re.sub(rf'\b{day}\b', '', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = re.sub(r'\band\b', '', cleaned_text, flags=re.IGNORECASE).strip()
+            return (cleaned_text, repeat_interval)
+        elif len(found_days) == 1:
+            return (cleaned_text, "weekly")
+        
+        # Check for explicit daily/weekly/monthly
+        if "day" in text_lower:
+            cleaned_text = re.sub(r'\bday\b', '', cleaned_text, flags=re.IGNORECASE).strip()
+            return (cleaned_text, "daily")
+        elif "week" in text_lower:
+            cleaned_text = re.sub(r'\bweek\b', '', cleaned_text, flags=re.IGNORECASE).strip()
+            return (cleaned_text, "weekly")
+        
+        # Default to daily if no specific pattern found
+        return (cleaned_text, "daily")
+    
+    # Check for standalone keywords
+    if "daily" in text_lower:
+        cleaned_text = re.sub(r'\bdaily\b', '', text, flags=re.IGNORECASE).strip()
+        return (cleaned_text, "daily")
+    elif "weekly" in text_lower:
+        cleaned_text = re.sub(r'\bweekly\b', '', text, flags=re.IGNORECASE).strip()
+        return (cleaned_text, "weekly")
+    elif "monthly" in text_lower:
+        cleaned_text = re.sub(r'\bmonthly\b', '', text, flags=re.IGNORECASE).strip()
+        return (cleaned_text, "monthly")
+    
+    return (text, None)
 
 def get_available_timezones() -> list:
     """Get a comprehensive list of common timezones organized by region"""

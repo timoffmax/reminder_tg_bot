@@ -2,14 +2,15 @@ import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from dateutil.relativedelta import relativedelta
 from src.database import SessionLocal
 from src.services.reminder_service import ReminderService
 from src.services.user_service import UserService
 from src.models.reminder import ReminderType
-from src.utils.timezone_utils import parse_time_input, convert_to_user_timezone
+from src.utils.timezone_utils import parse_time_input, convert_to_user_timezone, parse_recurring_pattern
 from datetime import timedelta
 
-def calculate_next_occurrence(reminder) -> datetime:
+def _calculate_next_occurrence(reminder) -> datetime:
     """Calculate the next occurrence for a repeating reminder"""
     if reminder.reminder_type != "repeating" or not reminder.repeat_interval:
         return None
@@ -20,7 +21,7 @@ def calculate_next_occurrence(reminder) -> datetime:
     elif reminder.repeat_interval == "weekly":
         next_time += timedelta(weeks=1)
     elif reminder.repeat_interval == "monthly":
-        next_time += timedelta(days=30)
+        next_time += relativedelta(months=1)
     elif reminder.repeat_interval and reminder.repeat_interval.startswith("multi-day:"):
         # Handle multi-day scheduling
         days_str = reminder.repeat_interval.replace("multi-day: ", "")
@@ -51,9 +52,9 @@ def calculate_next_occurrence(reminder) -> datetime:
 
 def escape_markdown(text: str) -> str:
     """Escape special characters for Markdown parse mode"""
-    # Only escape characters that actually need escaping in Telegram MarkdownV2
-    # Excluding '!' from escaping to avoid showing backslashes in user messages
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '=', '|', '{', '}', '.']
+    # Escape only the most critical MarkdownV2 characters that cause parsing issues
+    # Parentheses often don't need escaping for regular text content
+    special_chars = ['_', '*', '[', ']', '~', '`', '>', '#', '+', '=', '|', '{', '}', '.', '\\']
     for char in special_chars:
         text = text.replace(char, f'\\{char}')
     return text
@@ -77,40 +78,10 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         requires_confirmation = "confirm" in text.lower()
         text = re.sub(r'\bconfirm\b', '', text, flags=re.IGNORECASE).strip()
         
-        reminder_type = ReminderType.ONE_TIME
-        repeat_interval = None
+        # Parse recurring patterns
+        text, repeat_interval = parse_recurring_pattern(text)
         
-        # Check for "every" keyword - automatically makes it repeating
-        if "every" in text.lower():
-            reminder_type = ReminderType.REPEATING
-            text = re.sub(r'\bevery\b', '', text, flags=re.IGNORECASE).strip()
-            
-            # Check for multi-day patterns like "saturday and sunday"
-            weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-            found_days = [day for day in weekdays if day in text.lower()]
-            
-            if len(found_days) > 1:
-                repeat_interval = "multi-day: " + ", ".join(found_days)
-                # Remove all day names from text
-                for day in found_days:
-                    text = re.sub(rf'\b{day}\b', '', text, flags=re.IGNORECASE)
-                text = re.sub(r'\band\b', '', text, flags=re.IGNORECASE).strip()
-            elif len(found_days) == 1:
-                repeat_interval = "weekly"
-            else:
-                repeat_interval = "daily"  # Default if no specific days mentioned
-        elif "daily" in text.lower():
-            reminder_type = ReminderType.REPEATING
-            repeat_interval = "daily"
-            text = re.sub(r'\bdaily\b', '', text, flags=re.IGNORECASE).strip()
-        elif "weekly" in text.lower():
-            reminder_type = ReminderType.REPEATING
-            repeat_interval = "weekly"
-            text = re.sub(r'\bweekly\b', '', text, flags=re.IGNORECASE).strip()
-        elif "monthly" in text.lower():
-            reminder_type = ReminderType.REPEATING
-            repeat_interval = "monthly"
-            text = re.sub(r'\bmonthly\b', '', text, flags=re.IGNORECASE).strip()
+        reminder_type = ReminderType.REPEATING if repeat_interval else ReminderType.ONE_TIME
         
         parts = text.split(' ', 1)
         if len(parts) < 2:
@@ -122,7 +93,7 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         scheduled_time = parse_time_input(time_part, user_timezone)
         if not scheduled_time:
             await update.message.reply_text(
-                "Invalid time format. Use formats like: 10:30, 2h, 30m, 1d, 1w"
+                "Invalid time format. Use formats like: 10:30, 2h, 30m, 1d, 1w, 25th at 10AM"
             )
             return
         
@@ -196,7 +167,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if reminder.reminder_type == "repeating" and reminder.repeat_interval:
                     response += f"   🔄 Repeats: {reminder.repeat_interval}\n"
-                    next_occurrence = calculate_next_occurrence(reminder)
+                    next_occurrence = _calculate_next_occurrence(reminder)
                     if next_occurrence:
                         next_user_time = convert_to_user_timezone(next_occurrence, user_timezone)
                         response += f"   ⏭️ Next: {next_user_time.strftime('%Y-%m-%d %H:%M')}\n"

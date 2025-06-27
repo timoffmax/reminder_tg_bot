@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy.orm import Session
+from dateutil.relativedelta import relativedelta
 from src.models.reminder import Reminder, ReminderHistory, ReminderType, ReminderStatus
 from src.database import get_db
 
@@ -111,7 +112,7 @@ class ReminderService:
         elif reminder.repeat_interval == "weekly":
             reminder.scheduled_time += timedelta(weeks=1)
         elif reminder.repeat_interval == "monthly":
-            reminder.scheduled_time += timedelta(days=30)
+            reminder.scheduled_time += relativedelta(months=1)
         elif reminder.repeat_interval and reminder.repeat_interval.startswith("multi-day:"):
             # Handle multi-day scheduling (e.g., "multi-day: saturday, sunday")
             self._reschedule_multi_day_reminder(reminder)
