@@ -4,7 +4,7 @@ from src.database import SessionLocal
 from src.services.reminder_service import ReminderService
 from src.services.user_service import UserService
 from src.models.reminder import ReminderType
-from src.utils.timezone_utils import parse_time_input, convert_to_user_timezone
+from src.utils.timezone_utils import parse_time_input, convert_to_user_timezone, parse_recurring_pattern
 import pytz
 
 def escape_markdown(text: str) -> str:
@@ -71,7 +71,10 @@ async def reminder_time_received(update: Update, context: ContextTypes.DEFAULT_T
         user_service = UserService(db)
         user_timezone = user_service.get_user_timezone(user_id)
         
-        scheduled_time = parse_time_input(time_input, user_timezone)
+        # Parse recurring patterns first
+        cleaned_time_input, repeat_interval = parse_recurring_pattern(time_input)
+        
+        scheduled_time = parse_time_input(cleaned_time_input, user_timezone)
         
         if not scheduled_time:
             keyboard = [
@@ -95,6 +98,11 @@ async def reminder_time_received(update: Update, context: ContextTypes.DEFAULT_T
         # parse_time_input already returns UTC time, store directly
         context.user_data['scheduled_time'] = scheduled_time
         context.user_data['user_timezone'] = user_timezone
+        context.user_data['repeat_interval'] = repeat_interval
+        
+        # Automatically set reminder type if recurring pattern detected
+        if repeat_interval:
+            context.user_data['reminder_type'] = ReminderType.REPEATING
         
         # Show user the interpreted time
         user_time = convert_to_user_timezone(scheduled_time, user_timezone)
@@ -107,8 +115,13 @@ async def reminder_time_received(update: Update, context: ContextTypes.DEFAULT_T
         is_group = update.effective_chat.type in ['group', 'supergroup']
         total_steps = "6" if is_group else "4"
         
+        # Show appropriate time confirmation message
+        time_display = f"✅ Time set: {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone})"
+        if repeat_interval:
+            time_display += f"\n🔄 Schedule: {repeat_interval.replace('multi-day:', 'days:').title()}"
+        
         await update.message.reply_text(
-            f"✅ Time set: {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone})\n\n"
+            f"{time_display}\n\n"
             f"*Step 2/{total_steps}: What should I remind you about?*\n\n"
             "Enter your reminder message:",
             parse_mode='Markdown',
@@ -157,6 +170,32 @@ async def reminder_message_received(update: Update, context: ContextTypes.DEFAUL
         # Skip tagging step for private chats
         context.user_data['tagged_users'] = []
         
+        # If reminder type already determined from time input, skip type selection
+        if context.user_data.get('reminder_type'):
+            # Go directly to confirmation step
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Yes", callback_data="confirm_yes"),
+                    InlineKeyboardButton("❌ No", callback_data="confirm_no")
+                ],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            repeat_interval = context.user_data.get('repeat_interval')
+            type_display = f"Repeating ({repeat_interval})" if repeat_interval else "One-time"
+            
+            await update.message.reply_text(
+                f"✅ Message: {escape_markdown(message)}\n"
+                f"🔄 Type: {type_display}\n\n"
+                "*Step 3/4: Confirmation required?*\n\n"
+                "Do you want this reminder to require confirmation before being marked as done?",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            
+            return REMINDER_CONFIRMATION
+        
         keyboard = [
             [
                 InlineKeyboardButton("⏰ One-time", callback_data="type_one_time"),
@@ -182,6 +221,33 @@ async def skip_tagging(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     context.user_data['tagged_users'] = []
+    
+    # If reminder type already determined from time input, skip type selection
+    if context.user_data.get('reminder_type'):
+        # Go directly to confirmation step
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Yes", callback_data="confirm_yes"),
+                InlineKeyboardButton("❌ No", callback_data="confirm_no")
+            ],
+            [InlineKeyboardButton("🔙 Back", callback_data="back_to_tags")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        repeat_interval = context.user_data.get('repeat_interval')
+        type_display = f"Repeating ({repeat_interval})" if repeat_interval else "One-time"
+        
+        await query.edit_message_text(
+            f"✅ Message: {escape_markdown(context.user_data['message'])}\n"
+            f"🔄 Type: {type_display}\n\n"
+            "*Step 4/6: Confirmation required?*\n\n"
+            "Do you want this reminder to require confirmation before being marked as done?",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+        return REMINDER_CONFIRMATION
     
     keyboard = [
         [
@@ -226,6 +292,36 @@ async def reminder_tag_users_received(update: Update, context: ContextTypes.DEFA
         
         context.user_data['tagged_users'] = tagged_users
     
+    tagged_list = context.user_data['tagged_users']
+    tag_text = f"\n👥 Tagged: {escape_markdown(' '.join(tagged_list))}" if tagged_list else ""
+    
+    # If reminder type already determined from time input, skip type selection
+    if context.user_data.get('reminder_type'):
+        # Go directly to confirmation step
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Yes", callback_data="confirm_yes"),
+                InlineKeyboardButton("❌ No", callback_data="confirm_no")
+            ],
+            [InlineKeyboardButton("🔙 Back", callback_data="back_to_tags")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        repeat_interval = context.user_data.get('repeat_interval')
+        type_display = f"Repeating ({repeat_interval})" if repeat_interval else "One-time"
+        
+        await update.message.reply_text(
+            f"✅ Message: {escape_markdown(context.user_data['message'])}{tag_text}\n"
+            f"🔄 Type: {type_display}\n\n"
+            "*Step 5/6: Confirmation required?*\n\n"
+            "Do you want this reminder to require confirmation before being marked as done?",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+        return REMINDER_CONFIRMATION
+    
     keyboard = [
         [
             InlineKeyboardButton("⏰ One-time", callback_data="type_one_time"),
@@ -234,9 +330,6 @@ async def reminder_tag_users_received(update: Update, context: ContextTypes.DEFA
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    tagged_list = context.user_data['tagged_users']
-    tag_text = f"\n👥 Tagged: {escape_markdown(' '.join(tagged_list))}" if tagged_list else ""
     
     await update.message.reply_text(
         f"✅ Message: {escape_markdown(context.user_data['message'])}{tag_text}\n\n"
