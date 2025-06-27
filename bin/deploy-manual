@@ -52,11 +52,25 @@ ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && git pull o
 
 # Install/update dependencies on server
 log_info "Installing dependencies on server..."
-ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && python -m pip install -r requirements.txt"
+ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && python3 -m pip install -r requirements.txt" || \
+ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && pip3 install -r requirements.txt" || \
+ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && pip install -r requirements.txt" || {
+    log_error "Failed to install dependencies. Python pip not found."
+    echo ""
+    echo "Please install pip on the server first:"
+    echo "  ssh -i $SERVER_SSH_KEY $SERVER_USER@$SERVER_IP"
+    echo "  sudo apt update && sudo apt install python3-pip"
+    echo "  # or"
+    echo "  curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py"
+    echo "  python3 get-pip.py --user"
+    exit 1
+}
 
 # Run database migrations if needed
 log_info "Running database migrations..."
-ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && python -m alembic upgrade head" || log_warning "Migration failed or no migrations needed"
+ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && python3 -m alembic upgrade head" || \
+ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && python -m alembic upgrade head" || \
+log_warning "Migration failed or no migrations needed"
 
 log_success "Code deployment completed!"
 
