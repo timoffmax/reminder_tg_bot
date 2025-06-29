@@ -2,7 +2,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from src.database import SessionLocal
 from src.services.user_service import UserService
-from src.utils.timezone_utils import get_timezone_regions
+from src.services.reminder_service import ReminderService
+from src.utils.timezone_utils import get_timezone_regions, parse_time_input
+from datetime import datetime
 
 def get_main_menu_keyboard():
     """Get the main menu keyboard"""
@@ -153,3 +155,63 @@ What would you like to do?
         parse_mode='Markdown',
         reply_markup=get_main_menu_keyboard()
     )
+
+async def handle_custom_reschedule_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle custom reschedule time input"""
+    # Check if we're expecting a reschedule time
+    if not context.user_data.get('awaiting_reschedule_time'):
+        return False
+    
+    reminder_id = context.user_data.get('reschedule_reminder_id')
+    if not reminder_id:
+        return False
+    
+    # Clear the flags
+    context.user_data['awaiting_reschedule_time'] = False
+    
+    user_id = update.effective_user.id
+    time_input = update.message.text.strip()
+    
+    with SessionLocal() as db:
+        user_service = UserService(db)
+        user_timezone = user_service.get_user_timezone(user_id)
+        
+        # Parse the time input
+        new_time = parse_time_input(time_input, user_timezone)
+        
+        if not new_time:
+            await update.message.reply_text(
+                "❌ Invalid time format. Please try again or click Cancel.\n\n"
+                "Examples:\n"
+                "• `10:30` or `10:30 PM`\n"
+                "• `2h`, `30m`, `1d`\n"
+                "• `tomorrow at 3pm`\n"
+                "• `3 days`",
+                parse_mode='Markdown'
+            )
+            context.user_data['awaiting_reschedule_time'] = True
+            return True
+        
+        # Reschedule the reminder
+        reminder_service = ReminderService(db)
+        success = reminder_service.reschedule_reminder(reminder_id, new_time)
+        
+        if success:
+            # Update scheduler
+            scheduler_service = context.bot_data.get('scheduler_service')
+            if scheduler_service:
+                scheduler_service.reschedule_reminder(reminder_id)
+            
+            # Format the new time for display
+            from src.utils.timezone_utils import convert_to_user_timezone
+            user_time = convert_to_user_timezone(new_time, user_timezone)
+            
+            await update.message.reply_text(
+                f"✅ Reminder rescheduled to {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone})"
+            )
+        else:
+            await update.message.reply_text("❌ Failed to reschedule reminder.")
+    
+    # Clear context data
+    context.user_data.pop('reschedule_reminder_id', None)
+    return True

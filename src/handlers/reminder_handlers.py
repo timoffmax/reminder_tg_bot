@@ -22,6 +22,24 @@ def _calculate_next_occurrence(reminder) -> datetime:
         next_time += timedelta(weeks=1)
     elif reminder.repeat_interval == "monthly":
         next_time += relativedelta(months=1)
+    elif reminder.repeat_interval and reminder.repeat_interval.startswith("custom_"):
+        # Handle custom periods
+        parts = reminder.repeat_interval.split('_')
+        if len(parts) == 3:
+            try:
+                number = int(parts[1])
+                unit = parts[2]
+                
+                if unit == 'days':
+                    next_time += timedelta(days=number)
+                elif unit == 'weeks':
+                    next_time += timedelta(weeks=number)
+                elif unit == 'months':
+                    next_time += relativedelta(months=number)
+            except ValueError:
+                next_time += timedelta(weeks=1)  # Fallback
+        else:
+            next_time += timedelta(weeks=1)  # Fallback
     elif reminder.repeat_interval and reminder.repeat_interval.startswith("multi-day:"):
         # Handle multi-day scheduling
         days_str = reminder.repeat_interval.replace("multi-day: ", "")
@@ -68,6 +86,7 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
+    chat_title = update.effective_chat.title if update.effective_chat.type in ['group', 'supergroup'] else None
     
     with SessionLocal() as db:
         user_service = UserService(db)
@@ -116,6 +135,7 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reminder = reminder_service.create_reminder(
             user_id=user_id,
             chat_id=chat_id,
+            chat_title=chat_title,
             message_text=message,
             scheduled_time=scheduled_time,
             reminder_type=reminder_type,
@@ -165,8 +185,19 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"   📅 {user_time.strftime('%Y-%m-%d %H:%M')} ({escape_markdown(user_timezone)})\n"
                 )
                 
+                if reminder.chat_title:
+                    response += f"   💬 Group: {escape_markdown(reminder.chat_title)}\n"
+                
                 if reminder.reminder_type == "repeating" and reminder.repeat_interval:
-                    response += f"   🔄 Repeats: {reminder.repeat_interval}\n"
+                    # Format custom periods nicely
+                    if reminder.repeat_interval.startswith("custom_"):
+                        parts = reminder.repeat_interval.split('_')
+                        if len(parts) == 3:
+                            response += f"   🔄 Repeats: every {parts[1]} {parts[2]}\n"
+                        else:
+                            response += f"   🔄 Repeats: {reminder.repeat_interval}\n"
+                    else:
+                        response += f"   🔄 Repeats: {reminder.repeat_interval}\n"
                     next_occurrence = _calculate_next_occurrence(reminder)
                     if next_occurrence:
                         next_user_time = convert_to_user_timezone(next_occurrence, user_timezone)
@@ -176,7 +207,8 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     response += f"   😴 Snoozed {reminder.snooze_count} time(s)\n"
                 
                 if reminder.tagged_users:
-                    response += f"   👥 Tagged: {escape_markdown(' '.join(reminder.tagged_users))}\n"
+                    # Don't escape @ mentions - they need to work in Telegram
+                    response += f"   👥 Tagged: {' '.join(reminder.tagged_users)}\n"
                 
                 # Add cancel button for each reminder
                 keyboard.append([InlineKeyboardButton(f"❌ Cancel: {reminder.message_text[:20]}{'...' if len(reminder.message_text) > 20 else ''}", callback_data=f"cancel_{reminder.id}")])

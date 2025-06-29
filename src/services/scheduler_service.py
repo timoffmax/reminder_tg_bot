@@ -78,7 +78,8 @@ class SchedulerService:
             message = f"🔔 *Reminder:* {escape_markdown(reminder.message_text)}"
             
             if reminder.tagged_users:
-                tagged_mentions = escape_markdown(" ".join(reminder.tagged_users))
+                # Don't escape @ mentions - they need to work in Telegram
+                tagged_mentions = " ".join(reminder.tagged_users)
                 message += f"\n👥 {tagged_mentions}"
             
             keyboard = []
@@ -168,7 +169,8 @@ class SchedulerService:
                 message += "This reminder requires your confirmation. Please confirm or take action:"
                 
                 if reminder.tagged_users:
-                    tagged_mentions = escape_markdown(" ".join(reminder.tagged_users))
+                    # Don't escape @ mentions - they need to work in Telegram
+                    tagged_mentions = " ".join(reminder.tagged_users)
                     message += f"\n👥 {tagged_mentions}"
                 
                 keyboard = [

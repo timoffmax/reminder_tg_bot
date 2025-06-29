@@ -21,6 +21,7 @@ class Reminder(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(BigInteger, nullable=False, index=True)
     chat_id = Column(BigInteger, nullable=False, index=True)
+    chat_title = Column(String(255), nullable=True)
     message_text = Column(Text, nullable=False)
     scheduled_time = Column(DateTime, nullable=False)
     reminder_type = Column(String(20), nullable=False, default=ReminderType.ONE_TIME.value)

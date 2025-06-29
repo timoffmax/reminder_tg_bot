@@ -18,11 +18,13 @@ class ReminderService:
         reminder_type: ReminderType = ReminderType.ONE_TIME,
         requires_confirmation: bool = False,
         tagged_users: List[int] = None,
-        repeat_interval: Optional[str] = None
+        repeat_interval: Optional[str] = None,
+        chat_title: Optional[str] = None
     ) -> Reminder:
         reminder = Reminder(
             user_id=user_id,
             chat_id=chat_id,
+            chat_title=chat_title,
             message_text=message_text,
             scheduled_time=scheduled_time,
             reminder_type=reminder_type.value,
@@ -116,6 +118,9 @@ class ReminderService:
         elif reminder.repeat_interval and reminder.repeat_interval.startswith("multi-day:"):
             # Handle multi-day scheduling (e.g., "multi-day: saturday, sunday")
             self._reschedule_multi_day_reminder(reminder)
+        elif reminder.repeat_interval and reminder.repeat_interval.startswith("custom_"):
+            # Handle custom periods like "custom_3_days", "custom_2_weeks", "custom_3_months"
+            self._reschedule_custom_period_reminder(reminder)
         
         reminder.status = ReminderStatus.ACTIVE.value
         reminder.is_confirmed = False
@@ -153,6 +158,32 @@ class ReminderService:
             reminder.scheduled_time = next_occurrence
         else:
             # Fallback - schedule for next week
+            reminder.scheduled_time += timedelta(weeks=1)
+    
+    def _reschedule_custom_period_reminder(self, reminder: Reminder):
+        """Schedule next occurrence for custom period reminders"""
+        # Parse custom period format: "custom_3_days", "custom_2_weeks", etc.
+        parts = reminder.repeat_interval.split('_')
+        if len(parts) != 3 or parts[0] != 'custom':
+            # Fallback to weekly if parsing fails
+            reminder.scheduled_time += timedelta(weeks=1)
+            return
+        
+        try:
+            number = int(parts[1])
+            unit = parts[2]
+            
+            if unit == 'days':
+                reminder.scheduled_time += timedelta(days=number)
+            elif unit == 'weeks':
+                reminder.scheduled_time += timedelta(weeks=number)
+            elif unit == 'months':
+                reminder.scheduled_time += relativedelta(months=number)
+            else:
+                # Fallback to weekly for unknown units
+                reminder.scheduled_time += timedelta(weeks=1)
+        except (ValueError, IndexError):
+            # Fallback to weekly if parsing fails
             reminder.scheduled_time += timedelta(weeks=1)
     
     def reschedule_reminder(self, reminder_id: int, new_time: datetime) -> bool:

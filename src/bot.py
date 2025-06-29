@@ -4,7 +4,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.config import BOT_TOKEN
 from src.database import init_db
-from src.handlers.basic_handlers import start, help_command, set_timezone, menu
+from src.handlers.basic_handlers import start, help_command, set_timezone, menu, handle_custom_reschedule_time
 from src.handlers.reminder_handlers import (
     add_reminder, list_reminders, snooze_reminder, 
     cancel_reminder, confirm_reminder
@@ -90,6 +90,15 @@ def main():
     
     # Callback handlers
     application.add_handler(CallbackQueryHandler(handle_callback))
+    
+    # Message handler for custom reschedule time
+    async def check_custom_reschedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Check if message is for custom reschedule time"""
+        if await handle_custom_reschedule_time(update, context):
+            return
+        # If not handled, you could add other message handlers here
+    
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_custom_reschedule))
     
     # Error handler
     application.add_error_handler(error_handler)

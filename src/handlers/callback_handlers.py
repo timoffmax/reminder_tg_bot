@@ -285,7 +285,35 @@ What would you like to do?
         else:
             await query.edit_message_text("❌ Reminder not found or cannot be snoozed.")
     
-    elif data.startswith("reschedule_"):
+    elif data.startswith("reschedule_custom_"):
+        reminder_id = int(data.split("_")[2])
+        
+        # Store reminder ID for the conversation
+        context.user_data['reschedule_reminder_id'] = reminder_id
+        
+        keyboard = [
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"back_to_reminder_{reminder_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🔧 *Custom Reschedule Time*\n\n"
+            "Enter when you want to reschedule this reminder:\n\n"
+            "Examples:\n"
+            "• `10:30` or `10:30 PM` - Specific time\n"
+            "• `2h`, `30m`, `1d` - Relative time\n"
+            "• `tomorrow at 3pm` - Natural language\n"
+            "• `June 26 at 5PM` - Specific date\n"
+            "• `3 days` - Multiple days from now",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+        # Set conversation state to expect custom time
+        context.user_data['awaiting_reschedule_time'] = True
+        return
+    
+    elif data.startswith("reschedule_") and not data.startswith("reschedule_time_") and not data.startswith("reschedule_custom_"):
         reminder_id = int(data.split("_")[1])
         
         keyboard = [
@@ -294,6 +322,7 @@ What would you like to do?
             [InlineKeyboardButton("⏰ 1 hour", callback_data=f"reschedule_time_{reminder_id}_60")],
             [InlineKeyboardButton("⏰ 2 hours", callback_data=f"reschedule_time_{reminder_id}_120")],
             [InlineKeyboardButton("⏰ Tomorrow", callback_data=f"reschedule_time_{reminder_id}_1440")],
+            [InlineKeyboardButton("🔧 Custom Time", callback_data=f"reschedule_custom_{reminder_id}")],
             [InlineKeyboardButton("🔙 Back", callback_data=f"back_to_reminder_{reminder_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)

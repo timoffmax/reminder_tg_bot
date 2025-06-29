@@ -15,8 +15,31 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
+def get_step_info(context: ContextTypes.DEFAULT_TYPE) -> tuple[int, int]:
+    """Get current step number and total steps"""
+    current_step = context.user_data.get('current_step', 1)
+    
+    # Calculate total steps based on what's been determined so far
+    base_steps = 2  # time and message
+    if context.user_data.get('is_group'):
+        base_steps += 1  # tag users
+    
+    # Check if we know reminder type to add type selection step
+    if not context.user_data.get('reminder_type'):
+        base_steps += 1  # type selection
+    
+    # Check if repeating to add confirmation step
+    if context.user_data.get('reminder_type') == ReminderType.REPEATING or not context.user_data.get('reminder_type'):
+        base_steps += 1  # confirmation
+        
+    # Check if confirmation required to add snooze step
+    if context.user_data.get('requires_confirmation'):
+        base_steps += 1  # snooze duration
+    
+    return current_step, base_steps
+
 # Conversation states
-REMINDER_TIME, REMINDER_MESSAGE, REMINDER_TAG_USERS, REMINDER_TYPE, REMINDER_CONFIRMATION, REMINDER_SNOOZE_DURATION, REMINDER_FINAL = range(7)
+REMINDER_TIME, REMINDER_MESSAGE, REMINDER_TAG_USERS, REMINDER_TYPE, REMINDER_CONFIRMATION, REMINDER_SNOOZE_DURATION, REMINDER_FINAL, REMINDER_CUSTOM_PERIOD = range(8)
 
 async def start_interactive_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start interactive reminder creation"""
@@ -25,15 +48,27 @@ async def start_interactive_reminder(update: Update, context: ContextTypes.DEFAU
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Determine total steps based on chat type
+    # Initialize step tracking
     is_group = update.effective_chat.type in ['group', 'supergroup']
-    total_steps = "6" if is_group else "4"
+    context.user_data['is_group'] = is_group
+    context.user_data['current_step'] = 1
+    context.user_data['steps'] = []  # Track which steps we'll use
+    
+    # Determine which steps we'll show based on context
+    base_steps = ['time', 'message']
+    if is_group:
+        base_steps.append('tag_users')
+    
+    # We'll add more steps dynamically as we go
+    context.user_data['steps'] = base_steps
+    
+    current_step, total_steps = get_step_info(context)
     
     text = f"""🕒 *Interactive Reminder Creation*
 
 Let's create your reminder step by step!
 
-*Step 1/{total_steps}: When should I remind you?*
+*Step {current_step}/{total_steps}: When should I remind you?*
 
 Examples:
 • `10:30` or `10:30 PM` - At specific time
@@ -112,8 +147,9 @@ async def reminder_time_received(update: Update, context: ContextTypes.DEFAULT_T
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        is_group = update.effective_chat.type in ['group', 'supergroup']
-        total_steps = "6" if is_group else "4"
+        # Move to next step
+        context.user_data['current_step'] = 2
+        current_step, total_steps = get_step_info(context)
         
         # Show appropriate time confirmation message
         time_display = f"✅ Time set: {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone})"
@@ -122,7 +158,7 @@ async def reminder_time_received(update: Update, context: ContextTypes.DEFAULT_T
         
         await update.message.reply_text(
             f"{time_display}\n\n"
-            f"*Step 2/{total_steps}: What should I remind you about?*\n\n"
+            f"*Step {current_step}/{total_steps}: What should I remind you about?*\n\n"
             "Enter your reminder message:",
             parse_mode='Markdown',
             reply_markup=reply_markup
@@ -156,9 +192,13 @@ async def reminder_message_received(update: Update, context: ContextTypes.DEFAUL
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        # Move to next step
+        context.user_data['current_step'] = 3
+        current_step, total_steps = get_step_info(context)
+        
         await update.message.reply_text(
             f"✅ Message: {escape_markdown(message)}\n\n"
-            "*Step 3/6: Tag users (Optional)*\n\n"
+            f"*Step {current_step}/{total_steps}: Tag users (Optional)*\n\n"
             "Would you like to tag specific users for this reminder?\n"
             "Reply with usernames (e.g., @user1 @user2) or click 'Skip Tagging' to continue.",
             parse_mode='Markdown',
@@ -377,6 +417,7 @@ async def reminder_type_received(update: Update, context: ContextTypes.DEFAULT_T
                 InlineKeyboardButton("📆 Weekly", callback_data="repeat_weekly"),
                 InlineKeyboardButton("🗓 Monthly", callback_data="repeat_monthly")
             ],
+            [InlineKeyboardButton("🔧 Custom Period", callback_data="repeat_custom")],
             [InlineKeyboardButton("🔙 Back", callback_data="back_to_type")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
         ]
@@ -400,7 +441,28 @@ async def reminder_repeat_received(update: Update, context: ContextTypes.DEFAULT
         "repeat_monthly": "monthly"
     }
     
-    if query.data in repeat_map:
+    if query.data == "repeat_custom":
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back", callback_data="back_to_repeat_type")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🔧 *Custom Repeat Period*\n\n"
+            "Enter your custom repeat period:\n"
+            "• `3 days` - every 3 days\n"
+            "• `2 weeks` - every 2 weeks\n"
+            "• `3 months` - every 3 months\n"
+            "• `21 days` - every 21 days\n\n"
+            "Format: `<number> <unit>` where unit is days/weeks/months",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+        return REMINDER_CUSTOM_PERIOD
+    
+    elif query.data in repeat_map:
         context.user_data['reminder_type'] = ReminderType.REPEATING
         context.user_data['repeat_interval'] = repeat_map[query.data]
         
@@ -423,6 +485,69 @@ async def reminder_repeat_received(update: Update, context: ContextTypes.DEFAULT
         )
         
         return REMINDER_CONFIRMATION
+
+async def reminder_custom_period_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process custom repeat period input"""
+    import re
+    
+    text = update.message.text.strip().lower()
+    
+    # Parse pattern like "3 days", "2 weeks", "3 months"
+    pattern = r'^(\d+)\s*(day|days|week|weeks|month|months)$'
+    match = re.match(pattern, text)
+    
+    if not match:
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back", callback_data="back_to_repeat_type")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            "❌ Invalid format. Please use format like:\n"
+            "• `3 days`\n"
+            "• `2 weeks`\n"
+            "• `3 months`",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        return REMINDER_CUSTOM_PERIOD
+    
+    number = int(match.group(1))
+    unit = match.group(2)
+    
+    # Normalize unit names
+    if unit.startswith('day'):
+        unit = 'days'
+    elif unit.startswith('week'):
+        unit = 'weeks'
+    elif unit.startswith('month'):
+        unit = 'months'
+    
+    # Store custom period
+    custom_period = f"custom_{number}_{unit}"
+    context.user_data['reminder_type'] = ReminderType.REPEATING
+    context.user_data['repeat_interval'] = custom_period
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Yes", callback_data="confirm_yes"),
+            InlineKeyboardButton("❌ No", callback_data="confirm_no")
+        ],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_repeat_type")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"✅ Type: Repeating every {number} {unit}\n\n"
+        "*Step 5/6: Confirmation required?*\n\n"
+        "Do you want this reminder to require confirmation before being marked as done?",
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+    
+    return REMINDER_CONFIRMATION
 
 async def reminder_confirmation_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process confirmation requirement"""
@@ -490,6 +615,7 @@ async def create_reminder_final(update: Update, context: ContextTypes.DEFAULT_TY
     # Create the reminder
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
+    chat_title = update.effective_chat.title if update.effective_chat.type in ['group', 'supergroup'] else None
     
     scheduled_time = context.user_data['scheduled_time']
     message = context.user_data['message']
@@ -505,6 +631,7 @@ async def create_reminder_final(update: Update, context: ContextTypes.DEFAULT_TY
         reminder = reminder_service.create_reminder(
             user_id=user_id,
             chat_id=chat_id,
+            chat_title=chat_title,
             message_text=message,
             scheduled_time=scheduled_time,
             reminder_type=reminder_type,
@@ -521,18 +648,29 @@ async def create_reminder_final(update: Update, context: ContextTypes.DEFAULT_TY
     # Build summary message
     user_time = convert_to_user_timezone(scheduled_time, user_timezone)
     summary = f"🎉 *Reminder Created Successfully!*\n\n"
+    if chat_title:
+        summary += f"💬 *Group:* {escape_markdown(chat_title)}\n"
     summary += f"📝 *Message:* {escape_markdown(message)}\n"
     summary += f"🕒 *Time:* {user_time.strftime('%Y-%m-%d %H:%M')} ({escape_markdown(user_timezone)})\n"
     summary += f"🔄 *Type:* {escape_markdown(reminder_type.value.title())}"
     
     if repeat_interval:
-        summary += f" ({escape_markdown(repeat_interval)})"
+        # Format custom periods nicely
+        if repeat_interval.startswith("custom_"):
+            parts = repeat_interval.split('_')
+            if len(parts) == 3:
+                summary += f" (every {parts[1]} {parts[2]})"
+            else:
+                summary += f" ({escape_markdown(repeat_interval)})"
+        else:
+            summary += f" ({escape_markdown(repeat_interval)})"
     
     if requires_confirmation:
         summary += f"\n❓ *Confirmation:* Required (re-send after {default_snooze_minutes} min)"
     
     if tagged_users:
-        summary += f"\n👥 *Tagged:* {escape_markdown(' '.join(tagged_users))}"
+        # Don't escape @ mentions - they need to work in Telegram
+        summary += f"\n👥 *Tagged:* {' '.join(tagged_users)}"
     
     keyboard = [
         [InlineKeyboardButton("📋 My Reminders", callback_data="refresh_reminders")],
@@ -631,6 +769,32 @@ async def back_to_repeat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+async def back_to_repeat_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Go back to repeat type selection"""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 Daily", callback_data="repeat_daily"),
+            InlineKeyboardButton("📆 Weekly", callback_data="repeat_weekly"),
+            InlineKeyboardButton("🗓 Monthly", callback_data="repeat_monthly")
+        ],
+        [InlineKeyboardButton("🔧 Custom Period", callback_data="repeat_custom")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_type")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_interactive")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "🔄 *Repeating Reminder*\n\n"
+        "How often should this reminder repeat?",
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+    
+    return REMINDER_TYPE
+
 async def back_to_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Go back to confirmation requirement selection"""
     query = update.callback_query
@@ -694,11 +858,16 @@ def get_interactive_reminder_handler():
             REMINDER_CONFIRMATION: [
                 CallbackQueryHandler(reminder_confirmation_received, pattern=r"^confirm_"),
                 CallbackQueryHandler(back_to_type, pattern=r"^back_to_type$"),
-                CallbackQueryHandler(back_to_repeat, pattern=r"^back_to_repeat$")
+                CallbackQueryHandler(back_to_repeat, pattern=r"^back_to_repeat$"),
+                CallbackQueryHandler(back_to_repeat_type, pattern=r"^back_to_repeat_type$")
             ],
             REMINDER_SNOOZE_DURATION: [
                 CallbackQueryHandler(reminder_snooze_duration_received, pattern=r"^snooze_"),
                 CallbackQueryHandler(back_to_confirm, pattern=r"^back_to_confirm$")
+            ],
+            REMINDER_CUSTOM_PERIOD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_custom_period_received),
+                CallbackQueryHandler(back_to_repeat_type, pattern=r"^back_to_repeat_type$")
             ]
         },
         fallbacks=[
