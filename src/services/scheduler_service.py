@@ -130,13 +130,16 @@ class SchedulerService:
                 )
                 
                 if reminder.requires_confirmation and not reminder.is_confirmed:
+                    # Don't complete unconfirmed reminders, just wait for user confirmation
                     pass
                 else:
+                    # Complete confirmed reminders or non-confirmation reminders
                     reminder_service.complete_reminder(reminder.id)
                     
+                    # For repeating reminders, schedule the next occurrence  
                     if reminder.reminder_type == "repeating":
                         updated_reminder = reminder_service.get_reminder_by_id(reminder.id)
-                        if updated_reminder:
+                        if updated_reminder and updated_reminder.status == "active":
                             self.schedule_reminder(updated_reminder)
                             
             except Exception as e:

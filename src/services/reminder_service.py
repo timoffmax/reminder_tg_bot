@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from dateutil.relativedelta import relativedelta
+import pytz
 from src.models.reminder import Reminder, ReminderHistory, ReminderType, ReminderStatus
 from src.database import get_db
 
@@ -50,7 +51,7 @@ class ReminderService:
         return self.db.query(Reminder).filter(Reminder.id == reminder_id).first()
     
     def get_due_reminders(self) -> List[Reminder]:
-        now = datetime.now()
+        now = datetime.now(pytz.UTC).replace(tzinfo=None)
         return self.db.query(Reminder).filter(
             Reminder.scheduled_time <= now,
             Reminder.status == ReminderStatus.ACTIVE.value
@@ -203,7 +204,7 @@ class ReminderService:
         return True
     
     def get_unconfirmed_overdue_reminders(self, minutes_overdue: int = 5) -> List[Reminder]:
-        cutoff_time = datetime.now() - timedelta(minutes=minutes_overdue)
+        cutoff_time = datetime.now(pytz.UTC).replace(tzinfo=None) - timedelta(minutes=minutes_overdue)
         return self.db.query(Reminder).filter(
             Reminder.requires_confirmation == True,
             Reminder.is_confirmed == False,
