@@ -77,6 +77,10 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
+def escape_username(username: str) -> str:
+    """Escape underscores in usernames to prevent Markdown formatting while preserving @ functionality"""
+    return username.replace('_', '\\_')
+
 async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         # Start interactive mode
@@ -207,8 +211,8 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     response += f"   😴 Snoozed {reminder.snooze_count} time(s)\n"
                 
                 if reminder.tagged_users:
-                    # Don't escape @ mentions - they need to work in Telegram
-                    response += f"   👥 Tagged: {' '.join(reminder.tagged_users)}\n"
+                    # Escape underscores in usernames to prevent Markdown formatting
+                    response += f"   👥 Tagged: {' '.join([escape_username(user) for user in reminder.tagged_users])}\n"
                 
                 # Add cancel button for each reminder
                 keyboard.append([InlineKeyboardButton(f"❌ Cancel: {reminder.message_text[:20]}{'...' if len(reminder.message_text) > 20 else ''}", callback_data=f"cancel_{reminder.id}")])

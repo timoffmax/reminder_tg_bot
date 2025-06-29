@@ -18,6 +18,10 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
+def escape_username(username: str) -> str:
+    """Escape underscores in usernames to prevent Markdown formatting while preserving @ functionality"""
+    return username.replace('_', '\\_')
+
 class SchedulerService:
     def __init__(self, scheduler: AsyncIOScheduler, bot: Bot):
         self.scheduler = scheduler
@@ -78,8 +82,8 @@ class SchedulerService:
             message = f"🔔 *Reminder:* {escape_markdown(reminder.message_text)}"
             
             if reminder.tagged_users:
-                # Don't escape @ mentions - they need to work in Telegram
-                tagged_mentions = " ".join(reminder.tagged_users)
+                # Escape underscores in usernames to prevent Markdown formatting
+                tagged_mentions = " ".join([escape_username(user) for user in reminder.tagged_users])
                 message += f"\n👥 {tagged_mentions}"
             
             keyboard = []
@@ -169,8 +173,8 @@ class SchedulerService:
                 message += "This reminder requires your confirmation. Please confirm or take action:"
                 
                 if reminder.tagged_users:
-                    # Don't escape @ mentions - they need to work in Telegram
-                    tagged_mentions = " ".join(reminder.tagged_users)
+                    # Escape underscores in usernames to prevent Markdown formatting
+                    tagged_mentions = " ".join([escape_username(user) for user in reminder.tagged_users])
                     message += f"\n👥 {tagged_mentions}"
                 
                 keyboard = [
