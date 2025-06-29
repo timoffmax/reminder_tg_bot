@@ -1,5 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, CallbackQueryHandler, CommandHandler, filters
+from typing import Tuple
 from src.database import SessionLocal
 from src.services.reminder_service import ReminderService
 from src.services.user_service import UserService
@@ -15,7 +16,7 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
-def get_step_info(context: ContextTypes.DEFAULT_TYPE) -> tuple[int, int]:
+def get_step_info(context: ContextTypes.DEFAULT_TYPE) -> Tuple[int, int]:
     """Get current step number and total steps"""
     current_step = context.user_data.get('current_step', 1)
     
