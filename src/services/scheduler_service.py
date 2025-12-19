@@ -32,13 +32,14 @@ class SchedulerService:
     def _schedule_existing_reminders(self):
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
-            # Get all active reminders to reschedule after restart
+            # Get all active and snoozed reminders to reschedule after restart
+            # SNOOZED reminders must also be included as they have pending scheduled times
             from src.models.reminder import ReminderStatus
-            active_reminders = db.query(Reminder).filter(
-                Reminder.status == ReminderStatus.ACTIVE.value
+            pending_reminders = db.query(Reminder).filter(
+                Reminder.status.in_([ReminderStatus.ACTIVE.value, ReminderStatus.SNOOZED.value])
             ).all()
-            
-            for reminder in active_reminders:
+
+            for reminder in pending_reminders:
                 self.schedule_reminder(reminder)
     
     def schedule_reminder(self, reminder: Reminder):
@@ -128,20 +129,19 @@ class SchedulerService:
                     parse_mode='Markdown',
                     reply_markup=reply_markup
                 )
-                
-                if reminder.requires_confirmation and not reminder.is_confirmed:
-                    # Don't complete unconfirmed reminders, just wait for user confirmation
-                    pass
-                else:
-                    # Complete confirmed reminders or non-confirmation reminders
+
+                # For repeating reminders, always schedule the next occurrence
+                # Confirmation status should not block the schedule
+                if reminder.reminder_type == "repeating":
                     reminder_service.complete_reminder(reminder.id)
-                    
-                    # For repeating reminders, schedule the next occurrence  
-                    if reminder.reminder_type == "repeating":
-                        updated_reminder = reminder_service.get_reminder_by_id(reminder.id)
-                        if updated_reminder and updated_reminder.status == "active":
-                            self.schedule_reminder(updated_reminder)
-                            
+                    updated_reminder = reminder_service.get_reminder_by_id(reminder.id)
+                    if updated_reminder and updated_reminder.status == "active":
+                        self.schedule_reminder(updated_reminder)
+                elif not reminder.requires_confirmation:
+                    # Complete non-confirmation one-time reminders
+                    reminder_service.complete_reminder(reminder.id)
+                # For one-time reminders with confirmation, wait for user to confirm/complete
+
             except Exception as e:
                 print(f"Error sending reminder {reminder_id}: {e}")
     

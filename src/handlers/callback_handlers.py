@@ -225,27 +225,48 @@ What would you like to do?
     
     elif data.startswith("confirm_"):
         reminder_id = int(data.split("_")[1])
-        
+
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
-            success = reminder_service.confirm_reminder(reminder_id)
-        
-        if success:
-            await query.edit_message_text("✅ Reminder confirmed!")
-        else:
-            await query.edit_message_text("❌ Reminder not found or already confirmed.")
+            reminder = reminder_service.get_reminder_by_id(reminder_id)
+
+            if not reminder or not reminder.requires_confirmation:
+                await query.edit_message_text("❌ Reminder not found or doesn't require confirmation.")
+                return
+
+            is_repeating = reminder.reminder_type == "repeating"
+
+            if is_repeating:
+                # For repeating reminders, next occurrence is already scheduled when fired
+                # Confirm is just an acknowledgment
+                await query.edit_message_text("✅ Reminder confirmed! Next occurrence is already scheduled.")
+            else:
+                # For one-time reminders, confirm and complete
+                reminder_service.confirm_reminder(reminder_id)
+                reminder_service.complete_reminder(reminder_id)
+                await query.edit_message_text("✅ Reminder confirmed!")
     
     elif data.startswith("complete_"):
         reminder_id = int(data.split("_")[1])
-        
+
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
-            success = reminder_service.complete_reminder(reminder_id)
-        
-        if success:
-            await query.edit_message_text("✅ Reminder completed!")
-        else:
-            await query.edit_message_text("❌ Reminder not found.")
+            reminder = reminder_service.get_reminder_by_id(reminder_id)
+
+            if not reminder:
+                await query.edit_message_text("❌ Reminder not found.")
+                return
+
+            is_repeating = reminder.reminder_type == "repeating"
+
+            if is_repeating:
+                # For repeating reminders, next occurrence is already scheduled when fired
+                # Done/Complete is just an acknowledgment
+                await query.edit_message_text("✅ Reminder completed! Next occurrence is already scheduled.")
+            else:
+                # For one-time reminders, mark as completed
+                reminder_service.complete_reminder(reminder_id)
+                await query.edit_message_text("✅ Reminder completed!")
     
     elif data == "cancel_interactive":
         # This is handled by the conversation handler, but we need to prevent the error
@@ -253,19 +274,27 @@ What would you like to do?
     
     elif data.startswith("cancel_"):
         reminder_id = int(data.split("_")[1])
-        
+
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
-            success = reminder_service.cancel_reminder(reminder_id)
-        
-        if success:
-            # Show updated reminder list after cancellation
-            await query.answer("❌ Reminder cancelled!")
-            # Import the function dynamically to avoid circular import
-            from .reminder_handlers import list_reminders
-            await list_reminders(update, context)
-        else:
-            await query.edit_message_text("❌ Reminder not found.")
+            reminder = reminder_service.get_reminder_by_id(reminder_id)
+
+            if not reminder:
+                await query.edit_message_text("❌ Reminder not found.")
+                return
+
+            is_repeating = reminder.reminder_type == "repeating"
+
+            if is_repeating:
+                # For repeating reminders, "Cancel" means skip this occurrence
+                # Next occurrence is already scheduled when fired
+                await query.edit_message_text("⏭️ Skipped this occurrence. Next one is already scheduled.")
+            else:
+                # For one-time reminders, actually cancel/remove it
+                reminder_service.cancel_reminder(reminder_id)
+                await query.answer("❌ Reminder cancelled!")
+                from .reminder_handlers import list_reminders
+                await list_reminders(update, context)
     
     elif data.startswith("snooze_"):
         parts = data.split("_")
