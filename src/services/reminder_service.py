@@ -100,10 +100,21 @@ class ReminderService:
         reminder = self.get_reminder_by_id(reminder_id)
         if not reminder:
             return False
-        
+
         reminder.status = ReminderStatus.CANCELLED.value
         self.db.commit()
         self._log_action(reminder_id, "cancelled")
+        return True
+
+    def update_message_text(self, reminder_id: int, message_text: str) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder:
+            return False
+
+        old_text = reminder.message_text
+        reminder.message_text = message_text
+        self.db.commit()
+        self._log_action(reminder_id, "edited", {"old_text": old_text, "new_text": message_text})
         return True
     
     def get_reminder_history(self, reminder_id: int) -> List[ReminderHistory]:

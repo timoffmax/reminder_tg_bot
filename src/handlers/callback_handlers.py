@@ -3,7 +3,7 @@ from telegram.ext import ContextTypes
 from src.database import SessionLocal
 from src.services.reminder_service import ReminderService
 from src.services.user_service import UserService
-from src.utils.timezone_utils import get_timezone_regions
+from src.utils.timezone_utils import get_timezone_regions, convert_to_user_timezone
 
 def escape_markdown(text: str) -> str:
     """Escape special characters for Markdown parse mode"""
@@ -13,6 +13,55 @@ def escape_markdown(text: str) -> str:
     for char in special_chars:
         text = text.replace(char, f'\\{char}')
     return text
+
+async def _show_manage_view(query, reminder_id: int):
+    """Render the per-reminder management view."""
+    with SessionLocal() as db:
+        reminder_service = ReminderService(db)
+        user_service = UserService(db)
+
+        reminder = reminder_service.get_reminder_by_id(reminder_id)
+        if not reminder:
+            await query.edit_message_text("❌ Reminder not found.")
+            return
+
+        user_timezone = user_service.get_user_timezone(reminder.user_id)
+
+    user_time = convert_to_user_timezone(reminder.scheduled_time, user_timezone)
+
+    text = f"📋 *{escape_markdown(reminder.message_text)}*\n"
+    text += f"🕒 {user_time.strftime('%Y-%m-%d %H:%M')} ({escape_markdown(user_timezone)})\n"
+
+    if reminder.repeat_interval:
+        if reminder.repeat_interval.startswith("custom_"):
+            parts = reminder.repeat_interval.split('_')
+            if len(parts) == 3:
+                text += f"🔄 Repeats: every {parts[1]} {parts[2]}\n"
+            else:
+                text += f"🔄 Repeats: {escape_markdown(reminder.repeat_interval)}\n"
+        else:
+            text += f"🔄 Repeats: {escape_markdown(reminder.repeat_interval)}\n"
+
+    if reminder.requires_confirmation:
+        text += "❓ Requires confirmation\n"
+
+    if reminder.tagged_users:
+        tagged = ' '.join(u.replace('_', '\\_') for u in reminder.tagged_users)
+        text += f"👥 Tagged: {tagged}\n"
+
+    keyboard = [
+        [InlineKeyboardButton("✏️ Edit message", callback_data=f"editmsg_{reminder_id}")],
+        [InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder_id}")],
+        [InlineKeyboardButton("📝 History", callback_data=f"history_{reminder_id}")],
+        [InlineKeyboardButton("❌ Cancel reminder", callback_data=f"cancel_{reminder_id}")],
+        [InlineKeyboardButton("🔙 Back to list", callback_data="refresh_reminders")],
+    ]
+
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -268,6 +317,27 @@ What would you like to do?
                 reminder_service.complete_reminder(reminder_id)
                 await query.edit_message_text("✅ Reminder completed!")
     
+    elif data.startswith("manage_"):
+        reminder_id = int(data.split("_")[1])
+        # Clear any in-progress text-input expectations before showing the menu
+        context.user_data.pop('awaiting_edit_message_id', None)
+        context.user_data.pop('awaiting_reschedule_time', None)
+        context.user_data.pop('reschedule_reminder_id', None)
+        await _show_manage_view(query, reminder_id)
+        return
+
+    elif data.startswith("editmsg_"):
+        reminder_id = int(data.split("_")[1])
+        context.user_data['awaiting_edit_message_id'] = reminder_id
+
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data=f"manage_{reminder_id}")]]
+        await query.edit_message_text(
+            "✏️ *Edit reminder message*\n\nSend the new message text:",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
     elif data == "cancel_interactive":
         # This is handled by the conversation handler, but we need to prevent the error
         pass

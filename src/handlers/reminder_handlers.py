@@ -228,8 +228,9 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Escape underscores in usernames to prevent Markdown formatting
                     response += f"   👥 Tagged: {' '.join([escape_username(user) for user in reminder.tagged_users])}\n"
                 
-                # Add cancel button for each reminder
-                keyboard.append([InlineKeyboardButton(f"❌ Cancel: {reminder.message_text[:20]}{'...' if len(reminder.message_text) > 20 else ''}", callback_data=f"cancel_{reminder.id}")])
+                # Add manage button for each reminder
+                label_text = reminder.message_text[:30] + ('…' if len(reminder.message_text) > 30 else '')
+                keyboard.append([InlineKeyboardButton(f"📋 {label_text}", callback_data=f"manage_{reminder.id}")])
                 
                 response += "\n"
         

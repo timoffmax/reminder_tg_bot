@@ -156,6 +156,34 @@ What would you like to do?
         reply_markup=get_main_menu_keyboard()
     )
 
+async def handle_edit_message_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle new text input for an in-progress 'Edit message' action."""
+    reminder_id = context.user_data.get('awaiting_edit_message_id')
+    if not reminder_id:
+        return False
+
+    new_text = update.message.text.strip()
+
+    if len(new_text) > 500:
+        await update.message.reply_text("❌ Message too long (max 500 characters). Please try again:")
+        return True
+
+    if len(new_text) == 0:
+        await update.message.reply_text("❌ Message cannot be empty. Please try again:")
+        return True
+
+    context.user_data.pop('awaiting_edit_message_id', None)
+
+    with SessionLocal() as db:
+        reminder_service = ReminderService(db)
+        success = reminder_service.update_message_text(reminder_id, new_text)
+
+    if success:
+        await update.message.reply_text("✅ Reminder message updated.")
+    else:
+        await update.message.reply_text("❌ Failed to update reminder.")
+    return True
+
 async def handle_custom_reschedule_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle custom reschedule time input"""
     # Check if we're expecting a reschedule time
