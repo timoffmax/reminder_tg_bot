@@ -43,22 +43,34 @@ class SchedulerService:
                 self.schedule_reminder(reminder)
     
     def schedule_reminder(self, reminder: Reminder):
+        # Paused/cancelled/completed reminders should never be scheduled.
+        if reminder.status in (
+            ReminderStatus.PAUSED.value,
+            ReminderStatus.CANCELLED.value,
+            ReminderStatus.COMPLETED.value,
+        ):
+            self.remove_job(reminder.id)
+            return
+
         job_id = f"reminder_{reminder.id}"
-        
+
         if self.scheduler.get_job(job_id):
             self.scheduler.remove_job(job_id)
-        
+
         # Ensure the scheduled time is timezone-aware (UTC)
         scheduled_time = reminder.scheduled_time
         if scheduled_time.tzinfo is None:
             scheduled_time = pytz.UTC.localize(scheduled_time)
-        
+
+        # Apply the user's quiet-hours preference: shift firing into the next active window.
+        scheduled_time = self._apply_quiet_hours(reminder.user_id, scheduled_time)
+
         now_utc = datetime.now(pytz.UTC)
-        
+
         # If reminder is in the past, schedule it to run immediately
         if scheduled_time <= now_utc:
             scheduled_time = now_utc + timedelta(seconds=1)
-        
+
         self.scheduler.add_job(
             func=self._send_reminder,
             trigger="date",
@@ -68,6 +80,40 @@ class SchedulerService:
             replace_existing=True,
             timezone=pytz.UTC
         )
+
+    def _apply_quiet_hours(self, telegram_user_id: int, scheduled_time_aware: datetime) -> datetime:
+        """If the scheduled time falls inside the user's quiet hours, shift it to the end of the quiet window."""
+        with SessionLocal() as db:
+            user_service = UserService(db)
+            quiet = user_service.get_quiet_hours(telegram_user_id)
+            tz_name = user_service.get_user_timezone(telegram_user_id)
+
+        if not quiet:
+            return scheduled_time_aware
+
+        start_h, end_h = quiet
+        if start_h == end_h:
+            return scheduled_time_aware
+
+        if tz_name == 'Europe/Kiev':
+            tz_name = 'Europe/Kyiv'
+        user_tz = pytz.timezone(tz_name)
+        local = scheduled_time_aware.astimezone(user_tz)
+        hour = local.hour
+
+        # quiet window may wrap midnight (e.g. 23 -> 8)
+        in_quiet = (start_h < end_h and start_h <= hour < end_h) or (
+            start_h > end_h and (hour >= start_h or hour < end_h)
+        )
+        if not in_quiet:
+            return scheduled_time_aware
+
+        target = local.replace(hour=end_h, minute=0, second=0, microsecond=0)
+        if start_h > end_h and hour >= start_h:
+            # wrapped past midnight: end_h is on the next day
+            target = target + timedelta(days=1)
+
+        return user_tz.localize(target.replace(tzinfo=None), is_dst=False).astimezone(pytz.UTC)
     
     def remove_job(self, reminder_id: int) -> bool:
         """Safely remove a pending scheduler job for the given reminder."""
@@ -86,9 +132,13 @@ class SchedulerService:
             if not reminder:
                 return
 
-            # Don't deliver reminders the user has cancelled or completed —
+            # Don't deliver reminders the user has cancelled, completed, or paused —
             # protects against stale scheduler jobs that weren't removed.
-            if reminder.status in (ReminderStatus.CANCELLED.value, ReminderStatus.COMPLETED.value):
+            if reminder.status in (
+                ReminderStatus.CANCELLED.value,
+                ReminderStatus.COMPLETED.value,
+                ReminderStatus.PAUSED.value,
+            ):
                 return
             
             user_timezone = user_service.get_user_timezone(reminder.user_id)
@@ -105,7 +155,11 @@ class SchedulerService:
             if reminder.requires_confirmation and not reminder.is_confirmed:
                 keyboard.append([
                     InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}"),
-                    InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10")
+                    InlineKeyboardButton("😴 1h", callback_data=f"snooze_{reminder.id}_60"),
+                ])
+                keyboard.append([
+                    InlineKeyboardButton("🌅 Tomorrow 9am", callback_data=f"snoozeto_{reminder.id}_tomorrow_morning"),
+                    InlineKeyboardButton("📅 Mon 9am", callback_data=f"snoozeto_{reminder.id}_monday_morning"),
                 ])
                 keyboard.append([
                     InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
@@ -114,17 +168,24 @@ class SchedulerService:
                 # Confirmed reminders get a Done button
                 keyboard.append([
                     InlineKeyboardButton("✅ Done", callback_data=f"complete_{reminder.id}"),
-                    InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10"),
-                    InlineKeyboardButton("😴 Snooze 1h", callback_data=f"snooze_{reminder.id}_60")
+                    InlineKeyboardButton("😴 10m", callback_data=f"snooze_{reminder.id}_10"),
+                    InlineKeyboardButton("😴 1h", callback_data=f"snooze_{reminder.id}_60"),
                 ])
                 keyboard.append([
-                    InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
+                    InlineKeyboardButton("🌅 Tomorrow 9am", callback_data=f"snoozeto_{reminder.id}_tomorrow_morning"),
+                    InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}"),
                 ])
             else:
                 # Non-confirmation reminders get only snooze and reschedule
                 keyboard.append([
-                    InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10"),
-                    InlineKeyboardButton("😴 Snooze 1h", callback_data=f"snooze_{reminder.id}_60"),
+                    InlineKeyboardButton("😴 10m", callback_data=f"snooze_{reminder.id}_10"),
+                    InlineKeyboardButton("😴 1h", callback_data=f"snooze_{reminder.id}_60"),
+                ])
+                keyboard.append([
+                    InlineKeyboardButton("🌅 Tomorrow 9am", callback_data=f"snoozeto_{reminder.id}_tomorrow_morning"),
+                    InlineKeyboardButton("📅 Mon 9am", callback_data=f"snoozeto_{reminder.id}_monday_morning"),
+                ])
+                keyboard.append([
                     InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
                 ])
             
@@ -195,14 +256,15 @@ class SchedulerService:
                 keyboard = [
                     [
                         InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}"),
-                        InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10")
+                        InlineKeyboardButton("😴 1h", callback_data=f"snooze_{reminder.id}_60"),
                     ],
                     [
-                        InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
+                        InlineKeyboardButton("🌅 Tomorrow 9am", callback_data=f"snoozeto_{reminder.id}_tomorrow_morning"),
+                        InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}"),
                     ],
                     [
                         InlineKeyboardButton("📝 View History", callback_data=f"history_{reminder.id}")
-                    ]
+                    ],
                 ]
                 
                 reply_markup = InlineKeyboardMarkup(keyboard)

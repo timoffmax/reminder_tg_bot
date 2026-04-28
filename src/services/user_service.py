@@ -57,3 +57,19 @@ class UserService:
     def get_user_timezone(self, telegram_user_id: int) -> str:
         user = self.get_user_by_telegram_id(telegram_user_id)
         return user.timezone if user else DEFAULT_TIMEZONE
+
+    def set_quiet_hours(self, telegram_user_id: int, start_hour: Optional[int], end_hour: Optional[int]) -> bool:
+        user = self.get_user_by_telegram_id(telegram_user_id)
+        if not user:
+            return False
+
+        user.quiet_start_hour = start_hour
+        user.quiet_end_hour = end_hour
+        self.db.commit()
+        return True
+
+    def get_quiet_hours(self, telegram_user_id: int) -> Optional[tuple]:
+        user = self.get_user_by_telegram_id(telegram_user_id)
+        if not user or user.quiet_start_hour is None or user.quiet_end_hour is None:
+            return None
+        return (user.quiet_start_hour, user.quiet_end_hour)

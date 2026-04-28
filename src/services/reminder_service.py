@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta
 from typing import Callable, List, Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import func as sa_func_lower_module
 from dateutil.relativedelta import relativedelta
 import pytz
 from src.models.reminder import Reminder, ReminderHistory, ReminderType, ReminderStatus
 from src.models.user import User
 from src.config import DEFAULT_TIMEZONE
 from src.database import get_db
+
+sa_func_lower = sa_func_lower_module.lower
 
 class ReminderService:
     def __init__(self, db: Session):
@@ -22,7 +25,9 @@ class ReminderService:
         requires_confirmation: bool = False,
         tagged_users: List[int] = None,
         repeat_interval: Optional[str] = None,
-        chat_title: Optional[str] = None
+        chat_title: Optional[str] = None,
+        repeat_until: Optional[datetime] = None,
+        parent_reminder_id: Optional[int] = None,
     ) -> Reminder:
         reminder = Reminder(
             user_id=user_id,
@@ -33,20 +38,30 @@ class ReminderService:
             reminder_type=reminder_type.value,
             requires_confirmation=requires_confirmation,
             tagged_users=tagged_users or [],
-            repeat_interval=repeat_interval
+            repeat_interval=repeat_interval,
+            repeat_until=repeat_until,
+            parent_reminder_id=parent_reminder_id,
         )
-        
+
         self.db.add(reminder)
         self.db.commit()
         self.db.refresh(reminder)
-        
+
         self._log_action(reminder.id, "created")
         return reminder
-    
+
     def get_active_reminders(self, user_id: int) -> List[Reminder]:
         return self.db.query(Reminder).filter(
             Reminder.user_id == user_id,
-            Reminder.status == ReminderStatus.ACTIVE.value
+            Reminder.status.in_([ReminderStatus.ACTIVE.value, ReminderStatus.PAUSED.value])
+        ).order_by(Reminder.scheduled_time).all()
+
+    def search_reminders(self, user_id: int, query: str) -> List[Reminder]:
+        like_query = f"%{query.lower()}%"
+        return self.db.query(Reminder).filter(
+            Reminder.user_id == user_id,
+            Reminder.status.in_([ReminderStatus.ACTIVE.value, ReminderStatus.PAUSED.value]),
+            sa_func_lower(Reminder.message_text).like(like_query),
         ).order_by(Reminder.scheduled_time).all()
     
     def get_reminder_by_id(self, reminder_id: int) -> Optional[Reminder]:
@@ -104,6 +119,142 @@ class ReminderService:
         reminder.status = ReminderStatus.CANCELLED.value
         self.db.commit()
         self._log_action(reminder_id, "cancelled")
+        return True
+
+    def pause_reminder(self, reminder_id: int) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder:
+            return False
+
+        if reminder.status not in (ReminderStatus.ACTIVE.value, ReminderStatus.SNOOZED.value):
+            return False
+
+        reminder.status = ReminderStatus.PAUSED.value
+        self.db.commit()
+        self._log_action(reminder_id, "paused")
+        return True
+
+    def resume_reminder(self, reminder_id: int) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder or reminder.status != ReminderStatus.PAUSED.value:
+            return False
+
+        # If the scheduled time has passed while paused, advance to the next future occurrence.
+        now = datetime.now(pytz.UTC).replace(tzinfo=None)
+        if reminder.scheduled_time <= now and reminder.reminder_type == ReminderType.REPEATING.value:
+            self._reschedule_repeating_reminder(reminder)
+        else:
+            reminder.status = ReminderStatus.ACTIVE.value
+
+        self.db.commit()
+        self._log_action(reminder_id, "resumed")
+        return True
+
+    def skip_next_occurrence(self, reminder_id: int) -> bool:
+        """For repeating reminders: advance to the occurrence AFTER the next one (skipping it)."""
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder or reminder.reminder_type != ReminderType.REPEATING.value:
+            return False
+
+        self._reschedule_repeating_reminder(reminder)
+        self.db.commit()
+        self._log_action(reminder_id, "skipped")
+        return True
+
+    def cancel_all_for_user(self, user_id: int) -> List[int]:
+        active = self.db.query(Reminder).filter(
+            Reminder.user_id == user_id,
+            Reminder.status.in_([
+                ReminderStatus.ACTIVE.value,
+                ReminderStatus.SNOOZED.value,
+                ReminderStatus.PAUSED.value,
+            ]),
+        ).all()
+        cancelled_ids = []
+        for r in active:
+            r.status = ReminderStatus.CANCELLED.value
+            cancelled_ids.append(r.id)
+        self.db.commit()
+        for rid in cancelled_ids:
+            self._log_action(rid, "cancelled", {"bulk": True})
+        return cancelled_ids
+
+    def pause_all_for_user(self, user_id: int) -> List[int]:
+        targets = self.db.query(Reminder).filter(
+            Reminder.user_id == user_id,
+            Reminder.status.in_([ReminderStatus.ACTIVE.value, ReminderStatus.SNOOZED.value]),
+        ).all()
+        paused_ids = []
+        for r in targets:
+            r.status = ReminderStatus.PAUSED.value
+            paused_ids.append(r.id)
+        self.db.commit()
+        for rid in paused_ids:
+            self._log_action(rid, "paused", {"bulk": True})
+        return paused_ids
+
+    def resume_all_for_user(self, user_id: int) -> List[int]:
+        targets = self.db.query(Reminder).filter(
+            Reminder.user_id == user_id,
+            Reminder.status == ReminderStatus.PAUSED.value,
+        ).all()
+        now = datetime.now(pytz.UTC).replace(tzinfo=None)
+        resumed_ids = []
+        for r in targets:
+            if r.scheduled_time <= now and r.reminder_type == ReminderType.REPEATING.value:
+                self._reschedule_repeating_reminder(r)
+            else:
+                r.status = ReminderStatus.ACTIVE.value
+            resumed_ids.append(r.id)
+        self.db.commit()
+        for rid in resumed_ids:
+            self._log_action(rid, "resumed", {"bulk": True})
+        return resumed_ids
+
+    def create_lead_time_reminder(self, parent_id: int, lead_minutes: int) -> Optional[Reminder]:
+        """Create a child reminder that fires `lead_minutes` before the parent.
+
+        For repeating parents, the child mirrors the parent's repeat pattern so it follows the cadence.
+        Cascade to status changes is best-effort; users can manage the child via /reminders.
+        """
+        parent = self.get_reminder_by_id(parent_id)
+        if not parent or parent.parent_reminder_id is not None:
+            return None
+
+        child_text = f"⏳ {lead_minutes}m before: {parent.message_text}"
+        child_time = parent.scheduled_time - timedelta(minutes=lead_minutes)
+
+        child = Reminder(
+            user_id=parent.user_id,
+            chat_id=parent.chat_id,
+            chat_title=parent.chat_title,
+            message_text=child_text,
+            scheduled_time=child_time,
+            reminder_type=parent.reminder_type,
+            requires_confirmation=False,
+            tagged_users=parent.tagged_users or [],
+            repeat_interval=parent.repeat_interval,
+            repeat_until=parent.repeat_until,
+            parent_reminder_id=parent.id,
+        )
+        self.db.add(child)
+        self.db.commit()
+        self.db.refresh(child)
+        self._log_action(child.id, "created", {"lead_minutes": lead_minutes, "parent_id": parent.id})
+        return child
+
+    def set_repeat_until(self, reminder_id: int, repeat_until: Optional[datetime]) -> bool:
+        reminder = self.get_reminder_by_id(reminder_id)
+        if not reminder:
+            return False
+
+        reminder.repeat_until = repeat_until
+        self.db.commit()
+        self._log_action(
+            reminder_id,
+            "set_repeat_until",
+            {"value": repeat_until.isoformat() if repeat_until else None},
+        )
         return True
 
     def update_message_text(self, reminder_id: int, message_text: str) -> bool:
@@ -168,6 +319,12 @@ class ReminderService:
         elif reminder.repeat_interval and reminder.repeat_interval.startswith("custom_"):
             # Handle custom periods like "custom_3_days", "custom_2_weeks", "custom_3_months"
             self._reschedule_custom_period_reminder(reminder, now, user_tz)
+
+        # If the next occurrence is past the user-defined end date, complete the series.
+        if reminder.repeat_until is not None and reminder.scheduled_time > reminder.repeat_until:
+            reminder.status = ReminderStatus.COMPLETED.value
+            reminder.is_confirmed = False
+            return
 
         reminder.status = ReminderStatus.ACTIVE.value
         reminder.is_confirmed = False

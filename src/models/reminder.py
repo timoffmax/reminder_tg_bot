@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, BigInteger, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, BigInteger, JSON, ForeignKey
 from sqlalchemy.sql import func
 from src.database import Base
 from datetime import datetime
@@ -14,10 +14,11 @@ class ReminderStatus(Enum):
     COMPLETED = "completed"
     SNOOZED = "snoozed"
     CANCELLED = "cancelled"
+    PAUSED = "paused"
 
 class Reminder(Base):
     __tablename__ = "reminders"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(BigInteger, nullable=False, index=True)
     chat_id = Column(BigInteger, nullable=False, index=True)
@@ -30,6 +31,8 @@ class Reminder(Base):
     is_confirmed = Column(Boolean, default=False)
     tagged_users = Column(JSON, default=list)
     repeat_interval = Column(String(50), nullable=True)
+    repeat_until = Column(DateTime, nullable=True)
+    parent_reminder_id = Column(Integer, ForeignKey('reminders.id', ondelete='CASCADE'), nullable=True, index=True)
     snooze_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())

@@ -12,6 +12,8 @@ class User(Base):
     last_name = Column(String(255), nullable=True)
     timezone = Column(String(50), nullable=False, default="UTC")
     language_code = Column(String(10), nullable=True)
+    quiet_start_hour = Column(Integer, nullable=True)
+    quiet_end_hour = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     

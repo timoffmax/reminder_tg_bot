@@ -15,10 +15,11 @@ def get_main_menu_keyboard():
         ],
         [
             InlineKeyboardButton("⏰ Set Timezone", callback_data="menu_timezone"),
-            InlineKeyboardButton("❓ Help", callback_data="menu_help")
+            InlineKeyboardButton("🌙 Quiet hours", callback_data="menu_quiet_hours"),
         ],
         [
-            InlineKeyboardButton("ℹ️ About", callback_data="menu_about")
+            InlineKeyboardButton("❓ Help", callback_data="menu_help"),
+            InlineKeyboardButton("ℹ️ About", callback_data="menu_about"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -155,6 +156,108 @@ What would you like to do?
         parse_mode='Markdown',
         reply_markup=get_main_menu_keyboard()
     )
+
+async def handle_repeat_until_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'set end date' input for a repeating reminder."""
+    reminder_id = context.user_data.get('awaiting_repeat_until_id')
+    if not reminder_id:
+        return False
+
+    context.user_data.pop('awaiting_repeat_until_id', None)
+    text = update.message.text.strip()
+    user_id = update.effective_user.id
+
+    with SessionLocal() as db:
+        user_service = UserService(db)
+        user_timezone = user_service.get_user_timezone(user_id)
+
+        until_dt = parse_time_input(text, user_timezone)
+
+        if not until_dt:
+            await update.message.reply_text("❌ Couldn't parse the date. Try `2026-06-01` or `next month`.")
+            return True
+
+        # Use end-of-day in user's local TZ as the cutoff
+        from src.utils.timezone_utils import convert_to_user_timezone, convert_to_utc
+        local_dt = convert_to_user_timezone(until_dt, user_timezone)
+        end_of_day_local = local_dt.replace(hour=23, minute=59, second=59, microsecond=0)
+        end_of_day_utc = convert_to_utc(end_of_day_local, user_timezone)
+
+        reminder_service = ReminderService(db)
+        success = reminder_service.set_repeat_until(reminder_id, end_of_day_utc)
+
+    if success:
+        await update.message.reply_text(
+            f"✅ Reminder will stop after {local_dt.strftime('%Y-%m-%d')}."
+        )
+    else:
+        await update.message.reply_text("❌ Failed to set end date.")
+    return True
+
+
+async def handle_quiet_hours_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle quiet hours text input (format: 'HH-HH' or 'off')."""
+    if not context.user_data.get('awaiting_quiet_hours'):
+        return False
+
+    context.user_data.pop('awaiting_quiet_hours', None)
+    text = update.message.text.strip().lower()
+    user_id = update.effective_user.id
+
+    if text in ('off', 'disable', 'none', 'clear'):
+        with SessionLocal() as db:
+            user_service = UserService(db)
+            user_service.set_quiet_hours(user_id, None, None)
+        await update.message.reply_text("✅ Quiet hours disabled.")
+        return True
+
+    import re
+    match = re.match(r'^(\d{1,2})\s*-\s*(\d{1,2})$', text)
+    if not match:
+        await update.message.reply_text(
+            "❌ Invalid format. Use `HH-HH` (e.g. `23-8`) or `off` to disable.",
+            parse_mode='Markdown',
+        )
+        return True
+
+    start_h = int(match.group(1))
+    end_h = int(match.group(2))
+
+    if not (0 <= start_h <= 23 and 0 <= end_h <= 23):
+        await update.message.reply_text("❌ Hours must be 0–23.")
+        return True
+
+    if start_h == end_h:
+        await update.message.reply_text("❌ Start and end hour must differ.")
+        return True
+
+    with SessionLocal() as db:
+        user_service = UserService(db)
+        user_service.set_quiet_hours(user_id, start_h, end_h)
+
+    await update.message.reply_text(
+        f"✅ Quiet hours set: {start_h:02d}:00 – {end_h:02d}:00 local time.\n"
+        "Reminders that fall inside this window will be delivered at the end of the quiet period."
+    )
+    return True
+
+
+async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle search query input for /reminders search."""
+    if not context.user_data.get('awaiting_search_query'):
+        return False
+
+    context.user_data.pop('awaiting_search_query', None)
+    query = update.message.text.strip()
+
+    if not query:
+        await update.message.reply_text("❌ Empty search query.")
+        return True
+
+    from src.handlers.reminder_handlers import list_reminders
+    await list_reminders(update, context, filter_query=query)
+    return True
+
 
 async def handle_edit_message_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle new text input for an in-progress 'Edit message' action."""

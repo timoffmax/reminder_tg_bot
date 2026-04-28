@@ -176,38 +176,45 @@ async def add_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(response)
 
-async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE, filter_query: str = None):
     user_id = update.effective_user.id
-    
+
     with SessionLocal() as db:
         reminder_service = ReminderService(db)
         user_service = UserService(db)
-        
-        reminders = reminder_service.get_active_reminders(user_id)
+
+        if filter_query:
+            reminders = reminder_service.search_reminders(user_id, filter_query)
+        else:
+            reminders = reminder_service.get_active_reminders(user_id)
         user_timezone = user_service.get_user_timezone(user_id)
-        
-        response = "*Your Active Reminders:*\n\n"
+
+        if filter_query:
+            response = f"*Search results for `{escape_markdown(filter_query)}`:*\n\n"
+        else:
+            response = "*Your Active Reminders:*\n\n"
         keyboard = []
-        
+
         if not reminders:
-            response = "You have no active reminders."
+            response = "No matching reminders." if filter_query else "You have no active reminders."
         else:
             for reminder in reminders:
                 user_time = convert_to_user_timezone(reminder.scheduled_time, user_timezone)
                 status_emoji = "🔄" if reminder.reminder_type == "repeating" else "⏰"
+                if reminder.status == "paused":
+                    status_emoji = "⏸"
                 if reminder.requires_confirmation:
                     status_emoji += "❓" if not reminder.is_confirmed else "✅"
-                
+
                 response += (
                     f"{status_emoji} {escape_markdown(reminder.message_text)}\n"
                     f"   📅 {user_time.strftime('%Y-%m-%d %H:%M')} ({escape_markdown(user_timezone)})\n"
                 )
-                
+
                 if reminder.chat_title:
                     response += f"   💬 Group: {escape_markdown(reminder.chat_title)}\n"
-                
+
                 if reminder.reminder_type == "repeating" and reminder.repeat_interval:
-                    # Format custom periods nicely
                     if reminder.repeat_interval.startswith("custom_"):
                         parts = reminder.repeat_interval.split('_')
                         if len(parts) == 3:
@@ -220,22 +227,27 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if next_occurrence:
                         next_user_time = convert_to_user_timezone(next_occurrence, user_timezone)
                         response += f"   ⏭️ Next: {next_user_time.strftime('%Y-%m-%d %H:%M')}\n"
-                
+
+                if reminder.repeat_until:
+                    until_local = convert_to_user_timezone(reminder.repeat_until, user_timezone)
+                    response += f"   🏁 Until: {until_local.strftime('%Y-%m-%d')}\n"
+
                 if reminder.snooze_count > 0:
                     response += f"   😴 Snoozed {reminder.snooze_count} time(s)\n"
-                
+
                 if reminder.tagged_users:
-                    # Escape underscores in usernames to prevent Markdown formatting
                     response += f"   👥 Tagged: {' '.join([escape_username(user) for user in reminder.tagged_users])}\n"
-                
-                # Add manage button for each reminder
+
                 label_text = reminder.message_text[:30] + ('…' if len(reminder.message_text) > 30 else '')
                 keyboard.append([InlineKeyboardButton(f"📋 {label_text}", callback_data=f"manage_{reminder.id}")])
-                
+
                 response += "\n"
-        
-        # Add refresh and back buttons
+
         keyboard.extend([
+            [
+                InlineKeyboardButton("🔍 Search", callback_data="search_reminders"),
+                InlineKeyboardButton("🛠 Bulk", callback_data="bulk_menu"),
+            ],
             [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_reminders")],
             [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
         ])
