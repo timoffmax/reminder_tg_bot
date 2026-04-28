@@ -283,18 +283,18 @@ What would you like to do?
                 await query.edit_message_text("❌ Reminder not found.")
                 return
 
-            is_repeating = reminder.reminder_type == "repeating"
+            reminder_service.cancel_reminder(reminder_id)
 
-            if is_repeating:
-                # For repeating reminders, "Cancel" means skip this occurrence
-                # Next occurrence is already scheduled when fired
-                await query.edit_message_text("⏭️ Skipped this occurrence. Next one is already scheduled.")
-            else:
-                # For one-time reminders, actually cancel/remove it
-                reminder_service.cancel_reminder(reminder_id)
-                await query.answer("❌ Reminder cancelled!")
-                from .reminder_handlers import list_reminders
-                await list_reminders(update, context)
+        # Remove any pending scheduler job so a repeating reminder doesn't fire again
+        scheduler_service = context.bot_data.get('scheduler_service')
+        if scheduler_service:
+            job_id = f"reminder_{reminder_id}"
+            if scheduler_service.scheduler.get_job(job_id):
+                scheduler_service.scheduler.remove_job(job_id)
+
+        await query.answer("❌ Reminder cancelled!")
+        from .reminder_handlers import list_reminders
+        await list_reminders(update, context)
     
     elif data.startswith("snooze_"):
         parts = data.split("_")
@@ -401,10 +401,9 @@ What would you like to do?
         if reminder.requires_confirmation and not reminder.is_confirmed:
             keyboard.append([
                 InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}"),
-                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{reminder.id}")
+                InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10")
             ])
             keyboard.append([
-                InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10"),
                 InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
             ])
         elif reminder.requires_confirmation and reminder.is_confirmed:

@@ -1,4 +1,5 @@
 import re
+import pytz
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -10,63 +11,76 @@ from src.models.reminder import ReminderType
 from src.utils.timezone_utils import parse_time_input, convert_to_user_timezone, parse_recurring_pattern
 from datetime import timedelta
 
-def _calculate_next_occurrence(reminder) -> datetime:
-    """Calculate the next occurrence for a repeating reminder"""
+def _advance_in_local_tz(scheduled_time_utc: datetime, user_timezone: str, advance) -> datetime:
+    """Advance UTC scheduled_time by `advance` in the user's local TZ, preserving wall-clock time across DST."""
+    tz_name = 'Europe/Kyiv' if user_timezone == 'Europe/Kiev' else user_timezone
+    user_tz = pytz.timezone(tz_name)
+    aware_utc = pytz.UTC.localize(scheduled_time_utc)
+    local_naive = aware_utc.astimezone(user_tz).replace(tzinfo=None)
+    new_local_naive = advance(local_naive)
+    new_local_aware = user_tz.localize(new_local_naive, is_dst=False)
+    return new_local_aware.astimezone(pytz.UTC).replace(tzinfo=None)
+
+def _calculate_next_occurrence(reminder, user_timezone: str) -> datetime:
+    """Calculate the next occurrence for a repeating reminder (DST-safe in user's local TZ)"""
     if reminder.reminder_type != "repeating" or not reminder.repeat_interval:
         return None
-    
-    next_time = reminder.scheduled_time
+
+    weekly_advance = lambda dt: dt + timedelta(weeks=1)
+
     if reminder.repeat_interval == "daily":
-        next_time += timedelta(days=1)
+        return _advance_in_local_tz(reminder.scheduled_time, user_timezone, lambda dt: dt + timedelta(days=1))
     elif reminder.repeat_interval == "weekly":
-        next_time += timedelta(weeks=1)
+        return _advance_in_local_tz(reminder.scheduled_time, user_timezone, weekly_advance)
     elif reminder.repeat_interval == "monthly":
-        next_time += relativedelta(months=1)
-    elif reminder.repeat_interval and reminder.repeat_interval.startswith("custom_"):
-        # Handle custom periods
+        return _advance_in_local_tz(reminder.scheduled_time, user_timezone, lambda dt: dt + relativedelta(months=1))
+    elif reminder.repeat_interval.startswith("custom_"):
         parts = reminder.repeat_interval.split('_')
         if len(parts) == 3:
             try:
                 number = int(parts[1])
                 unit = parts[2]
-                
+
                 if unit == 'days':
-                    next_time += timedelta(days=number)
+                    advance = lambda dt: dt + timedelta(days=number)
                 elif unit == 'weeks':
-                    next_time += timedelta(weeks=number)
+                    advance = lambda dt: dt + timedelta(weeks=number)
                 elif unit == 'months':
-                    next_time += relativedelta(months=number)
+                    advance = lambda dt: dt + relativedelta(months=number)
+                else:
+                    advance = weekly_advance
             except ValueError:
-                next_time += timedelta(weeks=1)  # Fallback
+                advance = weekly_advance
         else:
-            next_time += timedelta(weeks=1)  # Fallback
-    elif reminder.repeat_interval and reminder.repeat_interval.startswith("multi-day:"):
-        # Handle multi-day scheduling
+            advance = weekly_advance
+        return _advance_in_local_tz(reminder.scheduled_time, user_timezone, advance)
+    elif reminder.repeat_interval.startswith("multi-day:"):
         days_str = reminder.repeat_interval.replace("multi-day: ", "")
         target_days = [day.strip() for day in days_str.split(",")]
-        
+
         day_map = {
             'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
             'friday': 4, 'saturday': 5, 'sunday': 6
         }
-        
+
         target_weekdays = [day_map[day] for day in target_days if day in day_map]
-        
+
         if target_weekdays:
-            current_weekday = next_time.weekday()
-            # Find the next target day
+            tz_name = 'Europe/Kyiv' if user_timezone == 'Europe/Kiev' else user_timezone
+            user_tz = pytz.timezone(tz_name)
+            current_weekday = pytz.UTC.localize(reminder.scheduled_time).astimezone(user_tz).weekday()
+            days_to_add = None
             for days_ahead in range(1, 8):
                 future_weekday = (current_weekday + days_ahead) % 7
                 if future_weekday in target_weekdays:
-                    next_time += timedelta(days=days_ahead)
+                    days_to_add = days_ahead
                     break
-            else:
-                # Fallback to next week
-                next_time += timedelta(weeks=1)
+            advance = (lambda dt, d=days_to_add: dt + timedelta(days=d)) if days_to_add is not None else weekly_advance
         else:
-            next_time += timedelta(weeks=1)
-    
-    return next_time
+            advance = weekly_advance
+        return _advance_in_local_tz(reminder.scheduled_time, user_timezone, advance)
+
+    return reminder.scheduled_time
 
 def escape_markdown(text: str) -> str:
     """Escape special characters for Markdown parse mode"""
@@ -202,7 +216,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             response += f"   🔄 Repeats: {reminder.repeat_interval}\n"
                     else:
                         response += f"   🔄 Repeats: {reminder.repeat_interval}\n"
-                    next_occurrence = _calculate_next_occurrence(reminder)
+                    next_occurrence = _calculate_next_occurrence(reminder, user_timezone)
                     if next_occurrence:
                         next_user_time = convert_to_user_timezone(next_occurrence, user_timezone)
                         response += f"   ⏭️ Next: {next_user_time.strftime('%Y-%m-%d %H:%M')}\n"

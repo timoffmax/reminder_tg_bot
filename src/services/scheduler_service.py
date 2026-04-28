@@ -92,10 +92,9 @@ class SchedulerService:
             if reminder.requires_confirmation and not reminder.is_confirmed:
                 keyboard.append([
                     InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}"),
-                    InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{reminder.id}")
+                    InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10")
                 ])
                 keyboard.append([
-                    InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10"),
                     InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
                 ])
             elif reminder.requires_confirmation and reminder.is_confirmed:
@@ -183,10 +182,9 @@ class SchedulerService:
                 keyboard = [
                     [
                         InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}"),
-                        InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{reminder.id}")
+                        InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10")
                     ],
                     [
-                        InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10"),
                         InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
                     ],
                     [
