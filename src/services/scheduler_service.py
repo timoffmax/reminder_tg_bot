@@ -6,7 +6,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from src.database import SessionLocal
 from src.services.reminder_service import ReminderService
 from src.services.user_service import UserService
-from src.models.reminder import Reminder
+from src.models.reminder import Reminder, ReminderStatus
 from src.utils.timezone_utils import convert_to_user_timezone
 
 def escape_markdown(text: str) -> str:
@@ -69,13 +69,26 @@ class SchedulerService:
             timezone=pytz.UTC
         )
     
+    def remove_job(self, reminder_id: int) -> bool:
+        """Safely remove a pending scheduler job for the given reminder."""
+        job_id = f"reminder_{reminder_id}"
+        if self.scheduler.get_job(job_id):
+            self.scheduler.remove_job(job_id)
+            return True
+        return False
+
     async def _send_reminder(self, reminder_id: int):
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
             user_service = UserService(db)
-            
+
             reminder = reminder_service.get_reminder_by_id(reminder_id)
             if not reminder:
+                return
+
+            # Don't deliver reminders the user has cancelled or completed —
+            # protects against stale scheduler jobs that weren't removed.
+            if reminder.status in (ReminderStatus.CANCELLED.value, ReminderStatus.COMPLETED.value):
                 return
             
             user_timezone = user_service.get_user_timezone(reminder.user_id)

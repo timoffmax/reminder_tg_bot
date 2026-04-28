@@ -358,9 +358,7 @@ What would you like to do?
         # Remove any pending scheduler job so a repeating reminder doesn't fire again
         scheduler_service = context.bot_data.get('scheduler_service')
         if scheduler_service:
-            job_id = f"reminder_{reminder_id}"
-            if scheduler_service.scheduler.get_job(job_id):
-                scheduler_service.scheduler.remove_job(job_id)
+            scheduler_service.remove_job(reminder_id)
 
         await query.answer("❌ Reminder cancelled!")
         from .reminder_handlers import list_reminders

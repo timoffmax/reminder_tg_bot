@@ -271,19 +271,22 @@ async def snooze_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /snooze <reminder_id> [minutes]")
         return
-    
+
     try:
         reminder_id = int(context.args[0])
         snooze_minutes = int(context.args[1]) if len(context.args) > 1 else 10
     except ValueError:
         await update.message.reply_text("Invalid reminder ID or snooze duration.")
         return
-    
+
     with SessionLocal() as db:
         reminder_service = ReminderService(db)
         success = reminder_service.snooze_reminder(reminder_id, snooze_minutes)
-    
+
     if success:
+        scheduler_service = context.bot_data.get('scheduler_service')
+        if scheduler_service:
+            scheduler_service.reschedule_reminder(reminder_id)
         await update.message.reply_text(f"⏰ Reminder {reminder_id} snoozed for {snooze_minutes} minutes.")
     else:
         await update.message.reply_text("Reminder not found or cannot be snoozed.")
@@ -292,18 +295,21 @@ async def cancel_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /cancel <reminder_id>")
         return
-    
+
     try:
         reminder_id = int(context.args[0])
     except ValueError:
         await update.message.reply_text("Invalid reminder ID.")
         return
-    
+
     with SessionLocal() as db:
         reminder_service = ReminderService(db)
         success = reminder_service.cancel_reminder(reminder_id)
-    
+
     if success:
+        scheduler_service = context.bot_data.get('scheduler_service')
+        if scheduler_service:
+            scheduler_service.remove_job(reminder_id)
         await update.message.reply_text(f"❌ Reminder {reminder_id} cancelled.")
     else:
         await update.message.reply_text("Reminder not found.")
