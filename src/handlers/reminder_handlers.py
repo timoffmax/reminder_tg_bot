@@ -203,6 +203,8 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE, fil
                 status_emoji = "🔄" if reminder.reminder_type == "repeating" else "⏰"
                 if reminder.status == "paused":
                     status_emoji = "⏸"
+                elif reminder.status == "snoozed":
+                    status_emoji = "😴"
                 if reminder.requires_confirmation:
                     status_emoji += "❓" if not reminder.is_confirmed else "✅"
 
@@ -293,13 +295,33 @@ async def snooze_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     with SessionLocal() as db:
         reminder_service = ReminderService(db)
-        success = reminder_service.snooze_reminder(reminder_id, snooze_minutes)
 
-    if success:
+        # A repeating reminder that hasn't fired yet has no occurrence to snooze;
+        # snoozing it would add an extra early ping instead of delaying anything.
+        reminder = reminder_service.get_reminder_by_id(reminder_id)
+        now = datetime.now(pytz.UTC).replace(tzinfo=None)
+
+        if reminder and reminder.reminder_type == "repeating" and reminder.scheduled_time > now:
+            await update.message.reply_text(
+                "This repeating reminder hasn't fired yet. "
+                "Use /reminders → manage to skip or reschedule its next occurrence."
+            )
+            return
+
+        snoozed = reminder_service.snooze_reminder(reminder_id, snooze_minutes)
+        snoozed_id = snoozed.id if snoozed else None
+
+    if snoozed_id is not None:
         scheduler_service = context.bot_data.get('scheduler_service')
         if scheduler_service:
-            scheduler_service.reschedule_reminder(reminder_id)
-        await update.message.reply_text(f"⏰ Reminder {reminder_id} snoozed for {snooze_minutes} minutes.")
+            scheduler_service.reschedule_reminder(snoozed_id)
+
+        if snoozed_id != reminder_id:
+            await update.message.reply_text(
+                f"⏰ Reminder {reminder_id} snoozed for {snooze_minutes} minutes. The repeating schedule is unchanged."
+            )
+        else:
+            await update.message.reply_text(f"⏰ Reminder {reminder_id} snoozed for {snooze_minutes} minutes.")
     else:
         await update.message.reply_text("Reminder not found or cannot be snoozed.")
 

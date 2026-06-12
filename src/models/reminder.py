@@ -29,6 +29,10 @@ class Reminder(Base):
     status = Column(String(20), nullable=False, default=ReminderStatus.ACTIVE.value)
     requires_confirmation = Column(Boolean, default=False)
     is_confirmed = Column(Boolean, default=False)
+    # When the last confirmation request was sent; None means no confirmation is pending.
+    last_confirmation_request_at = Column(DateTime, nullable=True)
+    # User-chosen snooze/re-send interval in minutes; None falls back to the global default.
+    default_snooze_minutes = Column(Integer, nullable=True)
     tagged_users = Column(JSON, default=list)
     repeat_interval = Column(String(50), nullable=True)
     repeat_until = Column(DateTime, nullable=True)

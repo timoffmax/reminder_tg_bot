@@ -638,7 +638,8 @@ async def create_reminder_final(update: Update, context: ContextTypes.DEFAULT_TY
             reminder_type=reminder_type,
             requires_confirmation=requires_confirmation,
             tagged_users=tagged_users,
-            repeat_interval=repeat_interval
+            repeat_interval=repeat_interval,
+            default_snooze_minutes=default_snooze_minutes
         )
         
         # Schedule the reminder
@@ -857,13 +858,15 @@ def get_interactive_reminder_handler():
                 CallbackQueryHandler(back_to_type, pattern=r"^back_to_type$")
             ],
             REMINDER_CONFIRMATION: [
-                CallbackQueryHandler(reminder_confirmation_received, pattern=r"^confirm_"),
+                # Exact match only: a loose ^confirm_ would swallow confirm_<id> buttons of fired reminders
+                CallbackQueryHandler(reminder_confirmation_received, pattern=r"^confirm_(yes|no)$"),
                 CallbackQueryHandler(back_to_type, pattern=r"^back_to_type$"),
                 CallbackQueryHandler(back_to_repeat, pattern=r"^back_to_repeat$"),
                 CallbackQueryHandler(back_to_repeat_type, pattern=r"^back_to_repeat_type$")
             ],
             REMINDER_SNOOZE_DURATION: [
-                CallbackQueryHandler(reminder_snooze_duration_received, pattern=r"^snooze_"),
+                # Exact match only: a loose ^snooze_ would swallow snooze_<id>_<min> buttons of fired reminders
+                CallbackQueryHandler(reminder_snooze_duration_received, pattern=r"^snooze_(5|10|15|30|60|120)$"),
                 CallbackQueryHandler(back_to_confirm, pattern=r"^back_to_confirm$")
             ],
             REMINDER_CUSTOM_PERIOD: [

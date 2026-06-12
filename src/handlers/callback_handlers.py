@@ -4,6 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from src.database import SessionLocal
 from src.services.reminder_service import ReminderService
+from src.services.scheduler_service import build_snooze_buttons
 from src.services.user_service import UserService
 from src.utils.timezone_utils import get_timezone_regions, convert_to_user_timezone
 
@@ -27,10 +28,12 @@ def _resolve_snooze_preset(preset: str, reminder_id: int):
     now_local = datetime.now(user_tz)
 
     if preset == 'tomorrow_morning':
-        target = (now_local + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        # Before 9am the "morning" the user means is the one coming up today.
+        days_ahead = 0 if now_local.hour < 9 else 1
+        target = (now_local + timedelta(days=days_ahead)).replace(hour=9, minute=0, second=0, microsecond=0)
     elif preset == 'monday_morning':
         days_ahead = (0 - now_local.weekday()) % 7
-        if days_ahead == 0:
+        if days_ahead == 0 and now_local.hour >= 9:
             days_ahead = 7
         target = (now_local + timedelta(days=days_ahead)).replace(hour=9, minute=0, second=0, microsecond=0)
     else:
@@ -369,8 +372,9 @@ What would you like to do?
             is_repeating = reminder.reminder_type == "repeating"
 
             if is_repeating:
-                # For repeating reminders, next occurrence is already scheduled when fired
-                # Confirm is just an acknowledgment
+                # For repeating reminders, next occurrence is already scheduled when fired;
+                # confirming stops the re-sends for the fired occurrence.
+                reminder_service.confirm_reminder(reminder_id)
                 await query.edit_message_text("✅ Reminder confirmed! Next occurrence is already scheduled.")
             else:
                 # For one-time reminders, confirm and complete
@@ -392,8 +396,10 @@ What would you like to do?
             is_repeating = reminder.reminder_type == "repeating"
 
             if is_repeating:
-                # For repeating reminders, next occurrence is already scheduled when fired
-                # Done/Complete is just an acknowledgment
+                # For repeating reminders, next occurrence is already scheduled when fired;
+                # acknowledging stops any pending confirmation re-sends.
+                if reminder.requires_confirmation:
+                    reminder_service.confirm_reminder(reminder_id)
                 await query.edit_message_text("✅ Reminder completed! Next occurrence is already scheduled.")
             else:
                 # For one-time reminders, mark as completed
@@ -471,13 +477,18 @@ What would you like to do?
 
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
-            success = reminder_service.reschedule_reminder(reminder_id, new_time_utc)
+            snoozed = reminder_service.snooze_reminder_until(reminder_id, new_time_utc)
+            snoozed_id = snoozed.id if snoozed else None
 
-        if success:
+        if snoozed_id is not None:
             scheduler_service = context.bot_data.get('scheduler_service')
             if scheduler_service:
-                scheduler_service.reschedule_reminder(reminder_id)
-            await query.edit_message_text("✅ Snoozed.")
+                scheduler_service.reschedule_reminder(snoozed_id)
+
+            if snoozed_id != reminder_id:
+                await query.edit_message_text("✅ Snoozed. The repeating schedule is unchanged.")
+            else:
+                await query.edit_message_text("✅ Snoozed.")
         else:
             await query.edit_message_text("❌ Failed to snooze.")
         return
@@ -659,19 +670,30 @@ What would you like to do?
     
     elif data.startswith("snooze_"):
         parts = data.split("_")
+
+        # Stale wizard buttons (snooze_5 ... snooze_120) have no reminder id — ignore them.
+        if len(parts) != 3:
+            return
+
         reminder_id = int(parts[1])
         snooze_minutes = int(parts[2])
-        
+
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
-            success = reminder_service.snooze_reminder(reminder_id, snooze_minutes)
-        
-        if success:
+            snoozed = reminder_service.snooze_reminder(reminder_id, snooze_minutes)
+            snoozed_id = snoozed.id if snoozed else None
+
+        if snoozed_id is not None:
             scheduler_service = context.bot_data.get('scheduler_service')
             if scheduler_service:
-                scheduler_service.reschedule_reminder(reminder_id)
-            
-            await query.edit_message_text(f"😴 Reminder snoozed for {snooze_minutes} minutes.")
+                scheduler_service.reschedule_reminder(snoozed_id)
+
+            if snoozed_id != reminder_id:
+                await query.edit_message_text(
+                    f"😴 Snoozed for {snooze_minutes} minutes. The repeating schedule is unchanged."
+                )
+            else:
+                await query.edit_message_text(f"😴 Reminder snoozed for {snooze_minutes} minutes.")
         else:
             await query.edit_message_text("❌ Reminder not found or cannot be snoozed.")
     
@@ -727,9 +749,9 @@ What would you like to do?
         parts = data.split("_")
         reminder_id = int(parts[2])
         minutes_delay = int(parts[3])
-        
-        from datetime import datetime, timedelta
-        new_time = datetime.now() + timedelta(minutes=minutes_delay)
+
+        # Scheduled times are stored as naive UTC; never use server-local time here.
+        new_time = datetime.now(pytz.UTC).replace(tzinfo=None) + timedelta(minutes=minutes_delay)
         
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
@@ -760,30 +782,28 @@ What would you like to do?
         
         keyboard = []
         if reminder.requires_confirmation and not reminder.is_confirmed:
-            keyboard.append([
-                InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}"),
-                InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10")
-            ])
+            keyboard.append(
+                [InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}")]
+                + build_snooze_buttons(reminder)
+            )
             keyboard.append([
                 InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
             ])
         elif reminder.requires_confirmation and reminder.is_confirmed:
             # Confirmed reminders get a Done button
-            keyboard.append([
-                InlineKeyboardButton("✅ Done", callback_data=f"complete_{reminder.id}"),
-                InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10"),
-                InlineKeyboardButton("😴 Snooze 1h", callback_data=f"snooze_{reminder.id}_60")
-            ])
+            keyboard.append(
+                [InlineKeyboardButton("✅ Done", callback_data=f"complete_{reminder.id}")]
+                + build_snooze_buttons(reminder)
+            )
             keyboard.append([
                 InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
             ])
         else:
             # Non-confirmation reminders get only snooze and reschedule
-            keyboard.append([
-                InlineKeyboardButton("😴 Snooze 10m", callback_data=f"snooze_{reminder.id}_10"),
-                InlineKeyboardButton("😴 Snooze 1h", callback_data=f"snooze_{reminder.id}_60"),
-                InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")
-            ])
+            keyboard.append(
+                build_snooze_buttons(reminder)
+                + [InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}")]
+            )
         
         keyboard.append([
             InlineKeyboardButton("📝 History", callback_data=f"history_{reminder.id}")

@@ -22,6 +22,28 @@ def escape_username(username: str) -> str:
     """Escape underscores in usernames to prevent Markdown formatting while preserving @ functionality"""
     return username.replace('_', '\\_')
 
+def format_snooze_label(minutes: int) -> str:
+    """Render a snooze duration as a compact button label (45 -> '45m', 120 -> '2h')."""
+    if minutes % 60 == 0:
+        return f"{minutes // 60}h"
+    return f"{minutes}m"
+
+def build_snooze_buttons(reminder: Reminder) -> list:
+    """Snooze buttons honoring the reminder's own default snooze duration.
+
+    Always offers two distinct options: the reminder's default plus 1h
+    (or 10m/1h when the default is 1h itself).
+    """
+    default_minutes = reminder.default_snooze_minutes or ReminderService.DEFAULT_SNOOZE_MINUTES
+    if default_minutes == 60:
+        options = [10, 60]
+    else:
+        options = sorted({default_minutes, 60})
+    return [
+        InlineKeyboardButton(f"😴 {format_snooze_label(minutes)}", callback_data=f"snooze_{reminder.id}_{minutes}")
+        for minutes in options
+    ]
+
 class SchedulerService:
     def __init__(self, scheduler: AsyncIOScheduler, bot: Bot):
         self.scheduler = scheduler
@@ -78,7 +100,10 @@ class SchedulerService:
             args=[reminder.id],
             id=job_id,
             replace_existing=True,
-            timezone=pytz.UTC
+            timezone=pytz.UTC,
+            # A late reminder must still be delivered; the default 1s grace
+            # silently drops jobs whenever the event loop is briefly busy.
+            misfire_grace_time=None
         )
 
     def _apply_quiet_hours(self, telegram_user_id: int, scheduled_time_aware: datetime) -> datetime:
@@ -151,12 +176,12 @@ class SchedulerService:
                 message += f"\n👥 {tagged_mentions}"
             
             keyboard = []
-            
+
             if reminder.requires_confirmation and not reminder.is_confirmed:
-                keyboard.append([
-                    InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}"),
-                    InlineKeyboardButton("😴 1h", callback_data=f"snooze_{reminder.id}_60"),
-                ])
+                keyboard.append(
+                    [InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}")]
+                    + build_snooze_buttons(reminder)
+                )
                 keyboard.append([
                     InlineKeyboardButton("🌅 Tomorrow 9am", callback_data=f"snoozeto_{reminder.id}_tomorrow_morning"),
                     InlineKeyboardButton("📅 Mon 9am", callback_data=f"snoozeto_{reminder.id}_monday_morning"),
@@ -166,21 +191,17 @@ class SchedulerService:
                 ])
             elif reminder.requires_confirmation and reminder.is_confirmed:
                 # Confirmed reminders get a Done button
-                keyboard.append([
-                    InlineKeyboardButton("✅ Done", callback_data=f"complete_{reminder.id}"),
-                    InlineKeyboardButton("😴 10m", callback_data=f"snooze_{reminder.id}_10"),
-                    InlineKeyboardButton("😴 1h", callback_data=f"snooze_{reminder.id}_60"),
-                ])
+                keyboard.append(
+                    [InlineKeyboardButton("✅ Done", callback_data=f"complete_{reminder.id}")]
+                    + build_snooze_buttons(reminder)
+                )
                 keyboard.append([
                     InlineKeyboardButton("🌅 Tomorrow 9am", callback_data=f"snoozeto_{reminder.id}_tomorrow_morning"),
                     InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}"),
                 ])
             else:
                 # Non-confirmation reminders get only snooze and reschedule
-                keyboard.append([
-                    InlineKeyboardButton("😴 10m", callback_data=f"snooze_{reminder.id}_10"),
-                    InlineKeyboardButton("😴 1h", callback_data=f"snooze_{reminder.id}_60"),
-                ])
+                keyboard.append(build_snooze_buttons(reminder))
                 keyboard.append([
                     InlineKeyboardButton("🌅 Tomorrow 9am", callback_data=f"snoozeto_{reminder.id}_tomorrow_morning"),
                     InlineKeyboardButton("📅 Mon 9am", callback_data=f"snoozeto_{reminder.id}_monday_morning"),
@@ -206,14 +227,25 @@ class SchedulerService:
                 # For repeating reminders, always schedule the next occurrence
                 # Confirmation status should not block the schedule
                 if reminder.reminder_type == "repeating":
+                    requires_confirmation = reminder.requires_confirmation
                     reminder_service.complete_reminder(reminder.id)
+
+                    # Advancing the series must not lose the pending confirmation:
+                    # re-sends are tracked via last_confirmation_request_at, not scheduled_time.
+                    if requires_confirmation:
+                        reminder_service.mark_confirmation_requested(reminder.id)
+
                     updated_reminder = reminder_service.get_reminder_by_id(reminder.id)
                     if updated_reminder and updated_reminder.status == "active":
                         self.schedule_reminder(updated_reminder)
                 elif not reminder.requires_confirmation:
                     # Complete non-confirmation one-time reminders
                     reminder_service.complete_reminder(reminder.id)
-                # For one-time reminders with confirmation, wait for user to confirm/complete
+                else:
+                    # One-time confirmation reminders stay pending until the user
+                    # confirms; this also reactivates previously snoozed ones so
+                    # they keep receiving re-sends.
+                    reminder_service.mark_confirmation_requested(reminder.id)
 
             except Exception as e:
                 print(f"Error sending reminder {reminder_id}: {e}")
@@ -232,7 +264,11 @@ class SchedulerService:
             trigger="interval",
             minutes=5,
             id="check_unconfirmed_reminders",
-            replace_existing=True
+            replace_existing=True,
+            # Never skip a check cycle just because the loop was busy at the tick;
+            # coalesce collapses any backlog into a single run.
+            misfire_grace_time=None,
+            coalesce=True
         )
     
     async def _check_unconfirmed_reminders(self):
@@ -254,10 +290,8 @@ class SchedulerService:
                     message += f"\n👥 {tagged_mentions}"
                 
                 keyboard = [
-                    [
-                        InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}"),
-                        InlineKeyboardButton("😴 1h", callback_data=f"snooze_{reminder.id}_60"),
-                    ],
+                    [InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{reminder.id}")]
+                    + build_snooze_buttons(reminder),
                     [
                         InlineKeyboardButton("🌅 Tomorrow 9am", callback_data=f"snoozeto_{reminder.id}_tomorrow_morning"),
                         InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder.id}"),
@@ -266,9 +300,9 @@ class SchedulerService:
                         InlineKeyboardButton("📝 View History", callback_data=f"history_{reminder.id}")
                     ],
                 ]
-                
+
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                
+
                 try:
                     await self.bot.send_message(
                         chat_id=reminder.chat_id,
@@ -276,5 +310,8 @@ class SchedulerService:
                         parse_mode='Markdown',
                         reply_markup=reply_markup
                     )
+
+                    # Restart the per-reminder re-send countdown.
+                    reminder_service.mark_confirmation_requested(reminder.id)
                 except Exception as e:
                     print(f"Error re-sending unconfirmed reminder {reminder.id}: {e}")
