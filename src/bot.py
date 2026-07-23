@@ -27,6 +27,7 @@ from src.handlers.basic_handlers import (
     handle_search_query,
     handle_quiet_hours_input,
     handle_repeat_until_input,
+    handle_change_schedule_input,
 )
 from src.handlers.reminder_handlers import (
     add_reminder, list_reminders, snooze_reminder, 
@@ -222,6 +223,8 @@ def main():
         if await handle_quiet_hours_input(update, context):
             return
         if await handle_repeat_until_input(update, context):
+            return
+        if await handle_change_schedule_input(update, context):
             return
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, dispatch_text_input))

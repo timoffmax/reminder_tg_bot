@@ -98,6 +98,9 @@ async def _show_manage_view(query, reminder_id: int):
 
     keyboard = [[InlineKeyboardButton("✏️ Edit message", callback_data=f"editmsg_{reminder_id}")]]
 
+    if reminder.parent_reminder_id is None:
+        keyboard.append([InlineKeyboardButton("🔄 Change schedule", callback_data=f"changesched_{reminder_id}")])
+
     if is_repeating and not is_paused:
         keyboard.append([InlineKeyboardButton("⏭ Skip next occurrence", callback_data=f"skip_{reminder_id}")])
 
@@ -413,6 +416,7 @@ What would you like to do?
         context.user_data.pop('awaiting_reschedule_time', None)
         context.user_data.pop('reschedule_reminder_id', None)
         context.user_data.pop('awaiting_search_query', None)
+        context.user_data.pop('awaiting_change_schedule_id', None)
         await _show_manage_view(query, reminder_id)
         return
 
@@ -630,6 +634,22 @@ What would you like to do?
         await _show_manage_view(query, reminder_id)
         return
 
+    elif data.startswith("changesched_"):
+        reminder_id = int(data.split("_")[1])
+        context.user_data['awaiting_change_schedule_id'] = reminder_id
+
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data=f"manage_{reminder_id}")]]
+        await query.edit_message_text(
+            "🔄 *Change schedule*\n\nSend the new schedule:\n"
+            "• `every day at 22:00`\n"
+            "• `every monday and thursday at 5PM`\n"
+            "• `weekly friday 9AM`\n"
+            "• `22:00` — keep the repeat pattern, change only the time",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
     elif data.startswith("editmsg_"):
         reminder_id = int(data.split("_")[1])
         context.user_data['awaiting_edit_message_id'] = reminder_id
@@ -716,7 +736,8 @@ What would you like to do?
             "• `2h`, `30m`, `1d` - Relative time\n"
             "• `tomorrow at 3pm` - Natural language\n"
             "• `June 26 at 5PM` - Specific date\n"
-            "• `3 days` - Multiple days from now",
+            "• `3 days` - Multiple days from now\n"
+            "• `every monday and thursday at 5PM` - Change the repeating schedule",
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
@@ -752,18 +773,25 @@ What would you like to do?
 
         # Scheduled times are stored as naive UTC; never use server-local time here.
         new_time = datetime.now(pytz.UTC).replace(tzinfo=None) + timedelta(minutes=minutes_delay)
-        
+
         with SessionLocal() as db:
             reminder_service = ReminderService(db)
-            success = reminder_service.reschedule_reminder(reminder_id, new_time)
-        
-        if success:
+            rescheduled = reminder_service.reschedule_reminder(reminder_id, new_time)
+            rescheduled_id = rescheduled.id if rescheduled else None
+
+        if rescheduled_id is not None:
             scheduler_service = context.bot_data.get('scheduler_service')
             if scheduler_service:
-                scheduler_service.reschedule_reminder(reminder_id)
-            
-            time_text = "tomorrow" if minutes_delay == 1440 else f"{minutes_delay} minutes"
-            await query.edit_message_text(f"⏰ Reminder rescheduled for {time_text} from now.")
+                scheduler_service.reschedule_reminder(rescheduled_id)
+
+            time_text = "tomorrow" if minutes_delay == 1440 else f"in {minutes_delay} minutes"
+
+            if rescheduled_id != reminder_id:
+                await query.edit_message_text(
+                    f"⏰ I'll remind you again {time_text}. The repeating schedule is unchanged."
+                )
+            else:
+                await query.edit_message_text(f"⏰ Reminder rescheduled {time_text}.")
         else:
             await query.edit_message_text("❌ Failed to reschedule reminder.")
     

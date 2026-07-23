@@ -16,6 +16,12 @@ class ReminderService:
     # Fallback snooze/re-send interval for reminders created without an explicit choice.
     DEFAULT_SNOOZE_MINUTES = 10
 
+    # Day names as stored in "multi-day: ..." repeat intervals -> Python weekday numbers (Monday=0).
+    WEEKDAY_MAP = {
+        'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+        'friday': 4, 'saturday': 5, 'sunday': 6,
+    }
+
     def __init__(self, db: Session):
         self.db = db
 
@@ -499,13 +505,7 @@ class ReminderService:
         days_str = reminder.repeat_interval.replace("multi-day: ", "")
         target_days = [day.strip() for day in days_str.split(",")]
 
-        # Map day names to weekday numbers (Monday=0, Sunday=6)
-        day_map = {
-            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
-            'friday': 4, 'saturday': 5, 'sunday': 6
-        }
-
-        target_weekdays = [day_map[day] for day in target_days if day in day_map]
+        target_weekdays = [self.WEEKDAY_MAP[day] for day in target_days if day in self.WEEKDAY_MAP]
         weekly_advance = lambda dt: dt + timedelta(weeks=1)
 
         if not target_weekdays:
@@ -574,11 +574,31 @@ class ReminderService:
             while reminder.scheduled_time <= now:
                 reminder.scheduled_time = self._advance_in_local_tz(reminder.scheduled_time, user_tz, weekly_advance)
     
-    def reschedule_reminder(self, reminder_id: int, new_time: datetime) -> bool:
+    def reschedule_reminder(self, reminder_id: int, new_time: datetime) -> Optional[Reminder]:
+        """Reschedule a reminder to an absolute UTC time.
+
+        For repeating reminders a one-off follow-up is created/retargeted instead,
+        so the series anchor (its wall-clock time-of-day) is never shifted.
+        Returns the reminder that should be (re)scheduled, or None if
+        rescheduling is not possible.
+        """
         reminder = self.get_reminder_by_id(reminder_id)
-        if not reminder:
-            return False
-        
+        if reminder is None:
+            return None
+
+        # Same contract as snoozing: CANCELLED stays dead (stale buttons must
+        # not resurrect it) and PAUSED requires an explicit resume.
+        if reminder.status in (ReminderStatus.CANCELLED.value, ReminderStatus.PAUSED.value):
+            return None
+
+        if reminder.reminder_type == ReminderType.REPEATING.value:
+            follow_up = self._create_snooze_follow_up(reminder, new_time)
+            self._log_action(reminder.id, "rescheduled", {
+                "new_time": new_time.isoformat(),
+                "follow_up_id": follow_up.id,
+            })
+            return follow_up
+
         old_time = reminder.scheduled_time
         reminder.scheduled_time = new_time
         reminder.status = ReminderStatus.ACTIVE.value
@@ -589,7 +609,110 @@ class ReminderService:
             "old_time": old_time.isoformat(),
             "new_time": new_time.isoformat()
         })
-        return True
+        return reminder
+
+    def change_repeat_schedule(
+        self,
+        reminder_id: int,
+        repeat_interval: str,
+        anchor_time: Optional[datetime] = None,
+    ) -> Optional[Reminder]:
+        """Change a reminder's recurrence pattern and, optionally, its anchor time.
+
+        The reminder becomes (or stays) REPEATING. When no anchor is given, the
+        current wall-clock time-of-day is kept and only advanced to the next
+        occurrence matching the new pattern. This is the deliberate way to
+        re-anchor a series — unlike snooze/reschedule, which never touch it.
+        Returns the updated reminder, or None if the change is not possible.
+        """
+        reminder = self.get_reminder_by_id(reminder_id)
+        if reminder is None or reminder.status == ReminderStatus.CANCELLED.value:
+            return None
+
+        # Children (snooze follow-ups, lead-time alerts) must not become their own
+        # series: the follow-up retarget lookup relies on ONE_TIME children of a
+        # repeating parent being snooze follow-ups.
+        if reminder.parent_reminder_id is not None:
+            return None
+
+        old_interval = reminder.repeat_interval
+        old_time = reminder.scheduled_time
+        user_tz = self._get_user_tz(reminder.user_id)
+
+        reminder.reminder_type = ReminderType.REPEATING.value
+        reminder.repeat_interval = repeat_interval
+
+        if anchor_time is not None:
+            reminder.scheduled_time = anchor_time
+
+        reminder.scheduled_time = self._align_to_pattern(reminder.scheduled_time, repeat_interval, user_tz)
+
+        # A paused series stays paused; everything else becomes schedulable again.
+        if reminder.status != ReminderStatus.PAUSED.value:
+            reminder.status = ReminderStatus.ACTIVE.value
+
+        reminder.is_confirmed = False
+        reminder.last_confirmation_request_at = None
+
+        self.db.commit()
+        self._log_action(reminder_id, "schedule_changed", {
+            "old_interval": old_interval,
+            "new_interval": repeat_interval,
+            "old_time": old_time.isoformat(),
+            "new_time": reminder.scheduled_time.isoformat(),
+        })
+        return reminder
+
+    def _align_to_pattern(
+        self,
+        scheduled_time_utc: datetime,
+        repeat_interval: str,
+        user_tz: pytz.BaseTzInfo,
+    ) -> datetime:
+        """Advance a UTC anchor (wall-clock preserving) until it is in the future and matches the pattern's weekdays."""
+        result = scheduled_time_utc
+        now = datetime.now(pytz.UTC).replace(tzinfo=None)
+        target_weekdays = None
+        advance = lambda dt: dt + timedelta(days=1)
+
+        if repeat_interval.startswith("multi-day:"):
+            days_str = repeat_interval.replace("multi-day: ", "")
+            target_weekdays = [
+                self.WEEKDAY_MAP[day.strip()]
+                for day in days_str.split(",")
+                if day.strip() in self.WEEKDAY_MAP
+            ] or None
+        elif repeat_interval == "weekly":
+            advance = lambda dt: dt + timedelta(weeks=1)
+        elif repeat_interval == "monthly":
+            advance = lambda dt: dt + relativedelta(months=1)
+        elif repeat_interval.startswith("custom_"):
+            parts = repeat_interval.split('_')
+
+            if len(parts) == 3:
+                try:
+                    number = int(parts[1])
+
+                    if parts[2] == 'days':
+                        advance = lambda dt: dt + timedelta(days=number)
+                    elif parts[2] == 'weeks':
+                        advance = lambda dt: dt + timedelta(weeks=number)
+                    elif parts[2] == 'months':
+                        advance = lambda dt: dt + relativedelta(months=number)
+                except ValueError:
+                    pass
+
+        # 400 daily steps cover any weekday/month combination; guards against loops.
+        for _ in range(400):
+            local_weekday = pytz.UTC.localize(result).astimezone(user_tz).weekday()
+            day_matches = (target_weekdays is None) or (local_weekday in target_weekdays)
+
+            if result > now and day_matches:
+                break
+
+            result = self._advance_in_local_tz(result, user_tz, advance)
+
+        return result
     
     def get_unconfirmed_overdue_reminders(self) -> List[Reminder]:
         """Reminders with a pending confirmation request older than their own re-send interval.

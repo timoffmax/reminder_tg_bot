@@ -3,7 +3,12 @@ from telegram.ext import ContextTypes
 from src.database import SessionLocal
 from src.services.user_service import UserService
 from src.services.reminder_service import ReminderService
-from src.utils.timezone_utils import get_timezone_regions, parse_time_input
+from src.utils.timezone_utils import (
+    get_timezone_regions,
+    parse_time_input,
+    parse_recurring_pattern,
+    convert_to_user_timezone,
+)
 from datetime import datetime
 
 def get_main_menu_keyboard():
@@ -287,62 +292,155 @@ async def handle_edit_message_text(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ Failed to update reminder.")
     return True
 
+def _describe_repeat_interval(repeat_interval: str) -> str:
+    """Render a stored repeat interval as human-readable text ('multi-day: monday, thursday' -> 'every monday, thursday')."""
+    if repeat_interval.startswith("multi-day: "):
+        return f"every {repeat_interval.replace('multi-day: ', '')}"
+
+    if repeat_interval.startswith("custom_"):
+        parts = repeat_interval.split('_')
+
+        if len(parts) == 3:
+            return f"every {parts[1]} {parts[2]}"
+
+    return repeat_interval
+
+async def _apply_schedule_change(update, context, reminder_id: int, repeat_interval: str, anchor_time, user_timezone: str):
+    """Apply a recurrence/anchor change, refresh the scheduler job and reply to the user."""
+    with SessionLocal() as db:
+        reminder_service = ReminderService(db)
+        reminder = reminder_service.change_repeat_schedule(reminder_id, repeat_interval, anchor_time)
+        new_time = reminder.scheduled_time if reminder else None
+
+    if new_time is None:
+        await update.message.reply_text("❌ Failed to change the schedule.")
+        return
+
+    scheduler_service = context.bot_data.get('scheduler_service')
+    if scheduler_service:
+        scheduler_service.reschedule_reminder(reminder_id)
+
+    user_time = convert_to_user_timezone(new_time, user_timezone)
+    await update.message.reply_text(
+        f"✅ Schedule changed: repeats {_describe_repeat_interval(repeat_interval)}, "
+        f"next on {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone})"
+    )
+
 async def handle_custom_reschedule_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle custom reschedule time input"""
     # Check if we're expecting a reschedule time
     if not context.user_data.get('awaiting_reschedule_time'):
         return False
-    
+
     reminder_id = context.user_data.get('reschedule_reminder_id')
     if not reminder_id:
         return False
-    
+
     # Clear the flags
     context.user_data['awaiting_reschedule_time'] = False
-    
+
     user_id = update.effective_user.id
     time_input = update.message.text.strip()
-    
+
     with SessionLocal() as db:
         user_service = UserService(db)
         user_timezone = user_service.get_user_timezone(user_id)
-        
-        # Parse the time input
-        new_time = parse_time_input(time_input, user_timezone)
-        
-        if not new_time:
-            await update.message.reply_text(
-                "❌ Invalid time format. Please try again or click Cancel.\n\n"
-                "Examples:\n"
-                "• `10:30` or `10:30 PM`\n"
-                "• `2h`, `30m`, `1d`\n"
-                "• `tomorrow at 3pm`\n"
-                "• `3 days`",
-                parse_mode='Markdown'
-            )
-            context.user_data['awaiting_reschedule_time'] = True
-            return True
-        
-        # Reschedule the reminder
+
+    # "Every ..." input means the user wants to change the recurrence,
+    # not move a single occurrence — honor that instead of dropping it.
+    cleaned_input, repeat_interval = parse_recurring_pattern(time_input)
+
+    if repeat_interval is not None:
+        anchor_time = parse_time_input(cleaned_input, user_timezone) if cleaned_input else None
+        await _apply_schedule_change(update, context, reminder_id, repeat_interval, anchor_time, user_timezone)
+        context.user_data.pop('reschedule_reminder_id', None)
+        return True
+
+    # Parse the time input
+    new_time = parse_time_input(time_input, user_timezone)
+
+    if not new_time:
+        await update.message.reply_text(
+            "❌ Invalid time format. Please try again or click Cancel.\n\n"
+            "Examples:\n"
+            "• `10:30` or `10:30 PM`\n"
+            "• `2h`, `30m`, `1d`\n"
+            "• `tomorrow at 3pm`\n"
+            "• `3 days`\n"
+            "• `every monday and thursday at 5PM`",
+            parse_mode='Markdown'
+        )
+        context.user_data['awaiting_reschedule_time'] = True
+        return True
+
+    with SessionLocal() as db:
+        # Reschedule the reminder (for repeating reminders this creates a
+        # one-off follow-up so the series anchor is never shifted)
         reminder_service = ReminderService(db)
-        success = reminder_service.reschedule_reminder(reminder_id, new_time)
-        
-        if success:
-            # Update scheduler
-            scheduler_service = context.bot_data.get('scheduler_service')
-            if scheduler_service:
-                scheduler_service.reschedule_reminder(reminder_id)
-            
-            # Format the new time for display
-            from src.utils.timezone_utils import convert_to_user_timezone
-            user_time = convert_to_user_timezone(new_time, user_timezone)
-            
+        rescheduled = reminder_service.reschedule_reminder(reminder_id, new_time)
+        rescheduled_id = rescheduled.id if rescheduled else None
+
+    if rescheduled_id is not None:
+        # Update scheduler
+        scheduler_service = context.bot_data.get('scheduler_service')
+        if scheduler_service:
+            scheduler_service.reschedule_reminder(rescheduled_id)
+
+        # Format the new time for display
+        user_time = convert_to_user_timezone(new_time, user_timezone)
+
+        if rescheduled_id != reminder_id:
+            await update.message.reply_text(
+                f"⏰ One-off reminder set for {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone}). "
+                "The repeating schedule is unchanged."
+            )
+        else:
             await update.message.reply_text(
                 f"✅ Reminder rescheduled to {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone})"
             )
-        else:
-            await update.message.reply_text("❌ Failed to reschedule reminder.")
-    
+    else:
+        await update.message.reply_text("❌ Failed to reschedule reminder.")
+
     # Clear context data
     context.user_data.pop('reschedule_reminder_id', None)
+    return True
+
+async def handle_change_schedule_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'Change schedule' input: a new recurrence and/or a new anchor time."""
+    reminder_id = context.user_data.get('awaiting_change_schedule_id')
+    if not reminder_id:
+        return False
+
+    context.user_data.pop('awaiting_change_schedule_id', None)
+    text = update.message.text.strip()
+    user_id = update.effective_user.id
+
+    with SessionLocal() as db:
+        user_service = UserService(db)
+        user_timezone = user_service.get_user_timezone(user_id)
+
+    cleaned_input, repeat_interval = parse_recurring_pattern(text)
+
+    if repeat_interval is None:
+        # No recurrence in the input: keep the existing pattern and only re-anchor its time.
+        with SessionLocal() as db:
+            reminder = ReminderService(db).get_reminder_by_id(reminder_id)
+            current_interval = reminder.repeat_interval if reminder else None
+
+        anchor_time = parse_time_input(text, user_timezone)
+
+        if not current_interval or not anchor_time:
+            await update.message.reply_text(
+                "❌ Couldn't parse that schedule. Include a repeat pattern and/or a time, e.g. "
+                "`every monday and thursday at 5PM` or `22:00`.",
+                parse_mode='Markdown',
+            )
+            context.user_data['awaiting_change_schedule_id'] = reminder_id
+            return True
+
+        await _apply_schedule_change(update, context, reminder_id, current_interval, anchor_time, user_timezone)
+        return True
+
+    anchor_time = parse_time_input(cleaned_input, user_timezone) if cleaned_input else None
+    await _apply_schedule_change(update, context, reminder_id, repeat_interval, anchor_time, user_timezone)
     return True
