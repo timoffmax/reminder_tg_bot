@@ -158,57 +158,30 @@ def parse_time_input(time_str: str, user_timezone: str) -> Optional[datetime]:
         if parsed_dt.tzinfo is None:
             parsed_dt = user_tz.localize(parsed_dt)
         
-        # If only time was specified (no date), adjust the date
-        if parsed_dt.date() == now.date() and parsed_dt.time() < now.time():
+        weekday_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        requested_weekday = next(
+            (index for index, name in enumerate(weekday_names) if name in time_str_lower), None
+        )
+
+        # If only time was specified (no date), adjust the date. An explicitly
+        # requested weekday is handled below instead, so "monday at 5pm" typed
+        # on a Monday evening doesn't drift to Tuesday.
+        if requested_weekday is None and parsed_dt.date() == now.date() and parsed_dt.time() < now.time():
             # If time is in the past today, assume tomorrow
             parsed_dt += timedelta(days=1)
-        
-        # Ensure the datetime is in the future
-        if parsed_dt <= now:
-            # If the parsed date is in the past, try to interpret it as next occurrence
-            if 'monday' in time_str_lower:
-                days_ahead = 0 - now.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                parsed_dt = now + timedelta(days=days_ahead)
-                parsed_dt = parsed_dt.replace(hour=parsed_dt.hour, minute=parsed_dt.minute)
-            elif 'tuesday' in time_str_lower:
-                days_ahead = 1 - now.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                parsed_dt = now + timedelta(days=days_ahead)
-                parsed_dt = parsed_dt.replace(hour=parsed_dt.hour, minute=parsed_dt.minute)
-            elif 'wednesday' in time_str_lower:
-                days_ahead = 2 - now.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                parsed_dt = now + timedelta(days=days_ahead)
-                parsed_dt = parsed_dt.replace(hour=parsed_dt.hour, minute=parsed_dt.minute)
-            elif 'thursday' in time_str_lower:
-                days_ahead = 3 - now.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                parsed_dt = now + timedelta(days=days_ahead)
-                parsed_dt = parsed_dt.replace(hour=parsed_dt.hour, minute=parsed_dt.minute)
-            elif 'friday' in time_str_lower:
-                days_ahead = 4 - now.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                parsed_dt = now + timedelta(days=days_ahead)
-                parsed_dt = parsed_dt.replace(hour=parsed_dt.hour, minute=parsed_dt.minute)
-            elif 'saturday' in time_str_lower:
-                days_ahead = 5 - now.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                parsed_dt = now + timedelta(days=days_ahead)
-                parsed_dt = parsed_dt.replace(hour=parsed_dt.hour, minute=parsed_dt.minute)
-            elif 'sunday' in time_str_lower:
-                days_ahead = 6 - now.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                parsed_dt = now + timedelta(days=days_ahead)
-                parsed_dt = parsed_dt.replace(hour=parsed_dt.hour, minute=parsed_dt.minute)
-        
+
+        # An explicitly requested weekday must be honored even when today's
+        # instance already passed: move to the next one, keeping the parsed time-of-day.
+        if requested_weekday is not None and parsed_dt <= now:
+            days_ahead = requested_weekday - now.weekday()
+
+            if days_ahead <= 0:
+                days_ahead += 7
+
+            parsed_dt = (now + timedelta(days=days_ahead)).replace(
+                hour=parsed_dt.hour, minute=parsed_dt.minute, second=0, microsecond=0
+            )
+
         return convert_to_utc(parsed_dt)
         
     except (ValueError, parser.ParserError):
@@ -238,7 +211,22 @@ def parse_recurring_pattern(text: str) -> tuple[str, Optional[str]]:
     if "every" in text_lower:
         # Remove "every" from text
         cleaned_text = re.sub(r'\bevery\b', '', text, flags=re.IGNORECASE).strip()
-        
+
+        # Numeric periods like "3 days", "2 weeks", "3 months" -> custom_N_unit;
+        # must run before the generic month/day/week checks so the number isn't dropped.
+        period_match = re.search(r'\b(\d+)\s*(day|week|month)s?\b', cleaned_text.lower())
+        if period_match:
+            number = int(period_match.group(1))
+            unit = period_match.group(2)
+            cleaned_text = re.sub(
+                rf'\b{number}\s*{unit}s?\b', '', cleaned_text, count=1, flags=re.IGNORECASE
+            ).strip()
+
+            if number == 1:
+                return (cleaned_text, {'day': 'daily', 'week': 'weekly', 'month': 'monthly'}[unit])
+
+            return (cleaned_text, f"custom_{number}_{unit}s")
+
         # Check for monthly patterns
         if "month" in text_lower:
             cleaned_text = re.sub(r'\bmonth\b', '', cleaned_text, flags=re.IGNORECASE).strip()

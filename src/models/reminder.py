@@ -34,7 +34,7 @@ class Reminder(Base):
     # User-chosen snooze/re-send interval in minutes; None falls back to the global default.
     default_snooze_minutes = Column(Integer, nullable=True)
     tagged_users = Column(JSON, default=list)
-    repeat_interval = Column(String(50), nullable=True)
+    repeat_interval = Column(String(100), nullable=True)
     repeat_until = Column(DateTime, nullable=True)
     parent_reminder_id = Column(Integer, ForeignKey('reminders.id', ondelete='CASCADE'), nullable=True, index=True)
     snooze_count = Column(Integer, default=0)

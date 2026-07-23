@@ -50,6 +50,19 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     return text
 
+def _clear_pending_text_flags(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Disarm every stateful text-input flow so an armed flag can't hijack unrelated input."""
+    for key in (
+        'awaiting_edit_message_id',
+        'awaiting_reschedule_time',
+        'reschedule_reminder_id',
+        'awaiting_search_query',
+        'awaiting_change_schedule_id',
+        'awaiting_repeat_until_id',
+        'awaiting_quiet_hours',
+    ):
+        context.user_data.pop(key, None)
+
 async def _show_manage_view(query, reminder_id: int):
     """Render the per-reminder management view."""
     with SessionLocal() as db:
@@ -113,7 +126,9 @@ async def _show_manage_view(query, reminder_id: int):
     if reminder.parent_reminder_id is None:
         keyboard.append([InlineKeyboardButton("🔔 Add lead-time alert", callback_data=f"leadtime_{reminder_id}")])
 
-    keyboard.append([InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder_id}")])
+    # Paused reminders can't be rescheduled (resume first), so don't offer it.
+    if not is_paused:
+        keyboard.append([InlineKeyboardButton("⏰ Reschedule", callback_data=f"reschedule_{reminder_id}")])
 
     if is_paused:
         keyboard.append([InlineKeyboardButton("▶️ Resume", callback_data=f"resume_{reminder_id}")])
@@ -230,6 +245,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             current = "Currently: disabled."
 
+        _clear_pending_text_flags(context)
         context.user_data['awaiting_quiet_hours'] = True
         keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]]
         await query.edit_message_text(
@@ -412,11 +428,7 @@ What would you like to do?
     elif data.startswith("manage_"):
         reminder_id = int(data.split("_")[1])
         # Clear any in-progress text-input expectations before showing the menu
-        context.user_data.pop('awaiting_edit_message_id', None)
-        context.user_data.pop('awaiting_reschedule_time', None)
-        context.user_data.pop('reschedule_reminder_id', None)
-        context.user_data.pop('awaiting_search_query', None)
-        context.user_data.pop('awaiting_change_schedule_id', None)
+        _clear_pending_text_flags(context)
         await _show_manage_view(query, reminder_id)
         return
 
@@ -498,6 +510,7 @@ What would you like to do?
         return
 
     elif data == "search_reminders":
+        _clear_pending_text_flags(context)
         context.user_data['awaiting_search_query'] = True
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="refresh_reminders")]]
         await query.edit_message_text(
@@ -612,6 +625,7 @@ What would you like to do?
 
     elif data.startswith("setuntil_"):
         reminder_id = int(data.split("_")[1])
+        _clear_pending_text_flags(context)
         context.user_data['awaiting_repeat_until_id'] = reminder_id
 
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data=f"manage_{reminder_id}")]]
@@ -636,6 +650,7 @@ What would you like to do?
 
     elif data.startswith("changesched_"):
         reminder_id = int(data.split("_")[1])
+        _clear_pending_text_flags(context)
         context.user_data['awaiting_change_schedule_id'] = reminder_id
 
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data=f"manage_{reminder_id}")]]
@@ -652,6 +667,7 @@ What would you like to do?
 
     elif data.startswith("editmsg_"):
         reminder_id = int(data.split("_")[1])
+        _clear_pending_text_flags(context)
         context.user_data['awaiting_edit_message_id'] = reminder_id
 
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data=f"manage_{reminder_id}")]]
@@ -719,8 +735,9 @@ What would you like to do?
     
     elif data.startswith("reschedule_custom_"):
         reminder_id = int(data.split("_")[2])
-        
+
         # Store reminder ID for the conversation
+        _clear_pending_text_flags(context)
         context.user_data['reschedule_reminder_id'] = reminder_id
         
         keyboard = [
@@ -793,7 +810,9 @@ What would you like to do?
             else:
                 await query.edit_message_text(f"⏰ Reminder rescheduled {time_text}.")
         else:
-            await query.edit_message_text("❌ Failed to reschedule reminder.")
+            await query.edit_message_text(
+                "❌ Cannot reschedule this reminder — it may be paused (resume it first) or cancelled."
+            )
     
     elif data.startswith("back_to_reminder_"):
         reminder_id = int(data.split("_")[3])
