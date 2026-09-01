@@ -298,7 +298,16 @@ async def snooze_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # A repeating reminder that hasn't fired yet has no occurrence to snooze;
         # snoozing it would add an extra early ping instead of delaying anything.
-        reminder = reminder_service.get_reminder_by_id(reminder_id)
+        reminder = reminder_service.get_reminder_for_user(
+            reminder_id,
+            update.effective_user.id,
+            update.effective_chat.id,
+        )
+
+        if reminder is None:
+            await update.message.reply_text("Reminder not found.")
+            return
+
         now = datetime.now(pytz.UTC).replace(tzinfo=None)
 
         if reminder and reminder.reminder_type == "repeating" and reminder.scheduled_time > now:
@@ -338,7 +347,12 @@ async def cancel_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     with SessionLocal() as db:
         reminder_service = ReminderService(db)
-        success = reminder_service.cancel_reminder(reminder_id)
+        authorized = reminder_service.get_reminder_for_user(
+            reminder_id,
+            update.effective_user.id,
+            update.effective_chat.id,
+        ) is not None
+        success = reminder_service.cancel_reminder(reminder_id) if authorized else False
 
     if success:
         scheduler_service = context.bot_data.get('scheduler_service')
@@ -361,8 +375,13 @@ async def confirm_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     with SessionLocal() as db:
         reminder_service = ReminderService(db)
-        success = reminder_service.confirm_reminder(reminder_id)
-    
+        authorized = reminder_service.get_reminder_for_user(
+            reminder_id,
+            update.effective_user.id,
+            update.effective_chat.id,
+        ) is not None
+        success = reminder_service.confirm_reminder(reminder_id) if authorized else False
+
     if success:
         await update.message.reply_text(f"✅ Reminder {reminder_id} confirmed.")
     else:

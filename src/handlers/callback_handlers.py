@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from typing import Optional
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -145,12 +146,85 @@ async def _show_manage_view(query, reminder_id: int):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
+# Callback prefixes that carry a reminder id as the token right after the prefix.
+# Longer prefixes come first so that e.g. "reschedule_time_" is not matched by
+# "reschedule_". Every one of these is authorized centrally in handle_callback().
+REMINDER_SCOPED_PREFIXES = (
+    "back_to_reminder_",
+    "reschedule_custom_",
+    "reschedule_time_",
+    "leadtimeset_",
+    "clearuntil_",
+    "changesched_",
+    "snoozeto_",
+    "reschedule_",
+    "setuntil_",
+    "complete_",
+    "leadtime_",
+    "confirm_",
+    "editmsg_",
+    "history_",
+    "manage_",
+    "resume_",
+    "cancel_",
+    "pause_",
+    "skip_",
+    "snooze_",
+)
+
+
+def extract_reminder_id(data: str) -> Optional[int]:
+    """Reminder id addressed by a callback, or None if it addresses no reminder.
+
+    Returns None for menu/wizard callbacks that merely look similar, such as
+    'cancel_interactive', 'skip_tagging' and the stale two-part 'snooze_5'
+    wizard buttons.
+    """
+    result = None
+
+    for prefix in REMINDER_SCOPED_PREFIXES:
+        if data.startswith(prefix) is False:
+            continue
+
+        # Stale wizard buttons (snooze_5 ... snooze_120) carry no reminder id.
+        if ((prefix == "snooze_") and (len(data.split("_")) != 3)):
+            break
+
+        candidate = data[len(prefix):].split("_")[0]
+
+        if candidate.isdigit():
+            result = int(candidate)
+
+        break
+
+    return result
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     data = query.data
-    
+
+    # Reminder ids are sequential and guessable, so authorize before dispatching
+    # any reminder-scoped action.
+    requested_id = extract_reminder_id(data)
+
+    if requested_id is not None:
+        user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
+
+        with SessionLocal() as db:
+            authorized = ReminderService(db).get_reminder_for_user(
+                requested_id,
+                user_id,
+                chat_id,
+            ) is not None
+
+        if authorized is False:
+            await query.edit_message_text("❌ Reminder not found.")
+            return
+
     # Handle main menu callbacks
     if data == "menu_my_reminders":
         from src.handlers.reminder_handlers import list_reminders

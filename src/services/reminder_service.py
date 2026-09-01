@@ -89,7 +89,40 @@ class ReminderService:
         ).order_by(Reminder.scheduled_time).all()
     
     def get_reminder_by_id(self, reminder_id: int) -> Optional[Reminder]:
+        """Unrestricted lookup. Internal/system use only.
+
+        Never call this from a handler acting on user input - reminder ids are
+        sequential and guessable, so use get_reminder_for_user() instead.
+        """
         return self.db.query(Reminder).filter(Reminder.id == reminder_id).first()
+
+    def is_visible_to(self, reminder: Reminder, user_id: int, chat_id: Optional[int] = None) -> bool:
+        """Whether the given requester may see and act on this reminder.
+
+        Owners always qualify. Group reminders are additionally manageable from
+        within their own chat, because the reminder message and its buttons are
+        visible to every member of that chat.
+        """
+        result = (reminder.user_id == user_id)
+
+        if ((result is False) and (chat_id is not None)):
+            result = (reminder.chat_id == chat_id) and (chat_id != user_id)
+
+        return result
+
+    def get_reminder_for_user(
+        self,
+        reminder_id: int,
+        user_id: int,
+        chat_id: Optional[int] = None,
+    ) -> Optional[Reminder]:
+        """Look up a reminder, returning None unless the requester is authorized."""
+        result = self.get_reminder_by_id(reminder_id)
+
+        if ((result is not None) and (self.is_visible_to(result, user_id, chat_id) is False)):
+            result = None
+
+        return result
     
     def get_due_reminders(self) -> List[Reminder]:
         now = datetime.now(pytz.UTC).replace(tzinfo=None)
