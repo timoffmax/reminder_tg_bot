@@ -122,7 +122,7 @@ jobs:
         fi
         
         # Check if bot process is running
-        if pgrep -f "python.*bot.py" > /dev/null; then
+        if pgrep -f "python.*src\.bot" > /dev/null; then
           echo "✅ Bot process is active"
         else
           echo "⚠️  Bot process not found, checking service logs..."

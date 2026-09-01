@@ -7,6 +7,7 @@ Run this script to create the database and tables if they don't exist.
 import sys
 import os
 import logging
+import re
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -26,7 +27,8 @@ def main():
     """Setup database and tables"""
     try:
         logger.info("Starting database setup...")
-        logger.info(f"Database URL: {DATABASE_URL}")
+        safe_url = re.sub(r'//([^:/@]+):[^@]+@', r'//\1:***@', DATABASE_URL)
+        logger.info(f"Database URL: {safe_url}")
         
         # Create database if it doesn't exist
         logger.info("Step 1: Creating database if it doesn't exist...")

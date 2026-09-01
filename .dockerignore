@@ -1,0 +1,12 @@
+.env
+.env.*
+.git/
+.github/
+.idea/
+venv/
+__pycache__/
+*.pyc
+*.log
+bin/
+tools/
+scripts/

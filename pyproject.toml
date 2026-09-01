@@ -2,7 +2,8 @@
 name = "reminder-tg-bot"
 version = "0.1.0"
 description = "A Telegram bot for managing reminders"
-authors = ["Your Name <you@example.com>"]
+authors = ["Tymofii Maksymenko"]
+license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -12,6 +13,9 @@ alembic = "^1.13.2"
 python-dotenv = "^1.0.1"
 apscheduler = "^3.10.4"
 pytz = "^2024.1"
+psycopg = { version = "^3.0", extras = ["binary"] }
+psycopg2-binary = "*"
+python-dateutil = "^2.8.2"
 
 [tool.poetry.dev-dependencies]
 pytest = "^8.3.2"

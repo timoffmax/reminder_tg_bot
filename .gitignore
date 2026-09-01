@@ -10,6 +10,8 @@ ENV/
 
 # Environment variables
 .env
+.env.*
+!.env.example
 
 # Database
 *.db
@@ -18,6 +20,7 @@ ENV/
 # IDE
 .vscode/
 .idea/
+*.iml
 *.swp
 *.swo
 
@@ -28,4 +31,14 @@ ENV/
 poetry.lock
 
 # Deployment config (contains server details)
-bin/deploy.conf
+bin/deploy.conf*
+
+# Keys and certificates
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Local dev tooling (not part of the project)
+/bin/commit
+/tools/

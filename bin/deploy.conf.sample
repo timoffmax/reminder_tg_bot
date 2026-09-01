@@ -4,11 +4,11 @@
 
 # Server Configuration
 SERVER_IP="your.server.ip.address"
-SERVER_USER="reminder_bot"
-SERVER_SSH_KEY="$HOME/.ssh/reminder_bot_key"
+SERVER_USER="your_deploy_user"
+SERVER_SSH_KEY="$HOME/.ssh/your_deploy_key"
 
 # Deployment Paths
-REMOTE_DIR="/var/www/reminder_tg_bot"
+REMOTE_DIR="/opt/reminder_tg_bot"
 
 # Service Configuration
 SERVICE_NAME="reminder-bot"

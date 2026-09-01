@@ -7,9 +7,9 @@ services:
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: reminder_user
-      POSTGRES_PASSWORD: reminder_pass
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
-      - "5433:5432"  # Use different port to avoid conflicts
+      - "127.0.0.1:5433:5432"  # Use different port to avoid conflicts, bind to localhost only
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -26,7 +26,7 @@ services:
         condition: service_healthy
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
-      - DATABASE_URL=postgresql://reminder_user:reminder_pass@postgres:5432/reminder_bot
+      - DATABASE_URL=postgresql://reminder_user:${POSTGRES_PASSWORD}@postgres:5432/reminder_bot
       - DEFAULT_TIMEZONE=${DEFAULT_TIMEZONE:-UTC}
     restart: unless-stopped
 
