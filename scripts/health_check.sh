@@ -10,7 +10,7 @@ if ! systemctl is-active --quiet reminder-bot; then
 fi
 
 # Check database connection
-if ! sudo -u reminder_bot /var/www/reminder_bot/venv/bin/python -c "
+if ! sudo -u reminder_bot /var/www/reminder_tg_bot/venv/bin/python -c "
 import os
 import psycopg2
 from urllib.parse import urlparse

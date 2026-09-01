@@ -9,6 +9,7 @@ from telegram.ext import (
     ContextTypes,
     CallbackQueryHandler,
     InlineQueryHandler,
+    ChosenInlineResultHandler,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.config import BOT_TOKEN
@@ -61,12 +62,33 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             except:
                 pass
 
-async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Inline-mode entry point: parse '<time> <message>' and offer to create a reminder.
+INLINE_CREATE_ID = "create-reminder"
 
-    The user chooses the result; on selection (chosen_inline_result handler) we create the reminder.
-    For simplicity, we create the reminder immediately when the user invokes the result, so the
-    inline article posts a confirmation that the reminder was scheduled.
+def _parse_inline_query(text: str, user_timezone: str):
+    """Parse an inline query into (scheduled_time, message, repeat_interval).
+
+    Returns None when the query is incomplete or the time cannot be parsed.
+    The time is the first word only, matching quick-mode /remind.
+    """
+    result = None
+    parts = text.split(' ', 1)
+
+    if len(parts) == 2:
+        time_part, message = parts
+        cleaned, repeat_interval = parse_recurring_pattern(time_part)
+        scheduled_time = parse_time_input(cleaned, user_timezone)
+
+        if (scheduled_time and message.strip()):
+            result = (scheduled_time, message.strip(), repeat_interval)
+
+    return result
+
+async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline-mode entry point: preview the reminder that '<time> <message>' would create.
+
+    This only renders a preview. Telegram fires an inline query on every keystroke,
+    so the reminder itself is created in handle_chosen_inline_result once the user
+    actually picks the result.
     """
     query = update.inline_query
     if not query:
@@ -82,46 +104,65 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
             InlineQueryResultArticle(
                 id=str(uuid4()),
                 title="Type: <time> <message>",
-                description="e.g. `5pm Buy milk`, `2h call mom`, `tomorrow 10am Meeting`",
+                description="e.g. 5pm Buy milk, 2h call mom, 09:00 Standup",
                 input_message_content=InputTextMessageContent("Open the bot and use /remind to create a reminder."),
             )
         )
         await query.answer(results, cache_time=1, is_personal=True)
         return
 
-    parts = text.split(' ', 1)
-    if len(parts) < 2:
+    with SessionLocal() as db:
+        user_timezone = UserService(db).get_user_timezone(user_id)
+
+    parsed = _parse_inline_query(text, user_timezone)
+
+    if parsed is None:
         results.append(
             InlineQueryResultArticle(
                 id=str(uuid4()),
-                title="Need both a time and a message",
-                description="e.g. `5pm Buy milk`",
-                input_message_content=InputTextMessageContent("Please include both a time and a message."),
+                title="❌ Need a time followed by a message",
+                description="The time must be one word, e.g. 5pm Buy milk",
+                input_message_content=InputTextMessageContent(
+                    "Couldn't parse that. Use a one-word time then the message, e.g. `5pm Buy milk`."
+                ),
             )
         )
         await query.answer(results, cache_time=1, is_personal=True)
         return
 
-    time_part, message = parts
+    scheduled_time, message, _ = parsed
+    user_time = convert_to_user_timezone(scheduled_time, user_timezone)
+    confirmation = f"✅ Reminder scheduled for {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone}): {message}"
+
+    results.append(
+        InlineQueryResultArticle(
+            id=INLINE_CREATE_ID,
+            title=f"⏰ {message}",
+            description=f"{user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone})",
+            input_message_content=InputTextMessageContent(confirmation),
+        )
+    )
+
+    await query.answer(results, cache_time=0, is_personal=True)
+
+async def handle_chosen_inline_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Create the reminder once the user actually picks the inline result."""
+    chosen = update.chosen_inline_result
+
+    if ((not chosen) or (chosen.result_id != INLINE_CREATE_ID)):
+        return
+
+    user_id = chosen.from_user.id
+    text = (chosen.query or "").strip()
 
     with SessionLocal() as db:
-        user_service = UserService(db)
-        user_timezone = user_service.get_user_timezone(user_id)
-        cleaned, repeat_interval = parse_recurring_pattern(time_part)
-        scheduled_time = parse_time_input(cleaned, user_timezone)
+        user_timezone = UserService(db).get_user_timezone(user_id)
+        parsed = _parse_inline_query(text, user_timezone)
 
-        if not scheduled_time:
-            results.append(
-                InlineQueryResultArticle(
-                    id=str(uuid4()),
-                    title="❌ Couldn't parse the time",
-                    description=f"Try: 5pm, 2h, tomorrow 10am, monday 9am",
-                    input_message_content=InputTextMessageContent("Couldn't parse the time. Try `5pm`, `2h`, `tomorrow 10am`."),
-                )
-            )
-            await query.answer(results, cache_time=1, is_personal=True)
+        if parsed is None:
             return
 
+        scheduled_time, message, repeat_interval = parsed
         reminder_service = ReminderService(db)
         reminder = reminder_service.create_reminder(
             user_id=user_id,
@@ -136,22 +177,13 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         scheduler_service = context.bot_data.get('scheduler_service')
+
         if scheduler_service:
             scheduler_service.schedule_reminder(reminder)
 
-        user_time = convert_to_user_timezone(scheduled_time, user_timezone)
+        reminder_id = reminder.id
 
-    confirmation = f"✅ Reminder scheduled for {user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone}): {message}"
-    results.append(
-        InlineQueryResultArticle(
-            id=str(uuid4()),
-            title=f"⏰ {message}",
-            description=f"{user_time.strftime('%Y-%m-%d %H:%M')} ({user_timezone})",
-            input_message_content=InputTextMessageContent(confirmation),
-        )
-    )
-
-    await query.answer(results, cache_time=0, is_personal=True)
+    logger.info(f"Inline reminder {reminder_id} created for user {user_id}")
 
 
 async def setup_bot_menu(bot):
@@ -208,8 +240,10 @@ def main():
     # Callback handlers
     application.add_handler(CallbackQueryHandler(handle_callback))
 
-    # Inline query handler — quick-create reminders from any chat: @bot 5pm meeting
+    # Inline query handler — quick-create reminders from any chat: @bot 5pm meeting.
+    # The query handler only previews; ChosenInlineResultHandler does the creating.
     application.add_handler(InlineQueryHandler(handle_inline_query))
+    application.add_handler(ChosenInlineResultHandler(handle_chosen_inline_result))
     
     # Message handler for stateful flows awaiting text input
     async def dispatch_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

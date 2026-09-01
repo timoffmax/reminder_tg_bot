@@ -16,7 +16,7 @@ COPY setup_db.py ./
 ENV PYTHONPATH=/app
 
 # Create startup script
-RUN echo '#!/bin/bash\necho "Setting up database..."\npython setup_db.py\necho "Starting bot..."\npython -m src.bot' > start.sh && chmod +x start.sh
+RUN echo '#!/bin/bash\necho "Setting up database..."\npython setup_db.py\necho "Starting bot..."\nexec python -m src.bot' > start.sh && chmod +x start.sh
 
 RUN useradd --create-home app && chown -R app:app /app
 USER app

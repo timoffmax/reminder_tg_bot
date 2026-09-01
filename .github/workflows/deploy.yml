@@ -12,11 +12,6 @@ on:
       - 'setup_db.py'
   workflow_dispatch:
     inputs:
-      force_deploy:
-        description: 'Force deployment even without changes'
-        required: false
-        default: 'false'
-        type: boolean
       restart_only:
         description: 'Only restart the bot service without updating code'
         required: false

@@ -7,7 +7,7 @@ Run this script to create the database and tables if they don't exist.
 import sys
 import os
 import logging
-import re
+from urllib.parse import urlsplit, urlunsplit
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -23,12 +23,33 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+def redact_database_url(url: str) -> str:
+    """Database URL with any password replaced by ***, safe for logging."""
+    result = url
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        result = '<unparseable database url>'
+    else:
+        if parts.password:
+            host = parts.hostname or ''
+
+            if parts.port:
+                host = f'{host}:{parts.port}'
+
+            netloc = f'{parts.username or ""}:***@{host}'
+            result = urlunsplit(
+                (parts.scheme, netloc, parts.path, parts.query, parts.fragment)
+            )
+
+    return result
+
 def main():
     """Setup database and tables"""
     try:
         logger.info("Starting database setup...")
-        safe_url = re.sub(r'//([^:/@]+):[^@]+@', r'//\1:***@', DATABASE_URL)
-        logger.info(f"Database URL: {safe_url}")
+        logger.info(f"Database URL: {redact_database_url(DATABASE_URL)}")
         
         # Create database if it doesn't exist
         logger.info("Step 1: Creating database if it doesn't exist...")

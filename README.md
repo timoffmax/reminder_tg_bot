@@ -67,7 +67,13 @@ python -m src.bot
 
 ### Database Migrations
 
-The schema is managed with Alembic. After pulling new code:
+Schema *changes* are managed with Alembic, but the initial revision is empty, so
+Alembic cannot build the schema from scratch. Step 5 above is therefore
+mandatory: `setup_db.py` creates the tables and `alembic stamp head` records
+that they are already up to date. Running `alembic upgrade head` on an
+unstamped database fails with a duplicate-column error.
+
+After pulling new code:
 
 ```bash
 alembic upgrade head
@@ -78,6 +84,9 @@ To create a new migration after changing the models:
 ```bash
 alembic revision --autogenerate -m "description"
 ```
+
+Migrations run from a host checkout — the Docker image ships only `src/` and
+`setup_db.py`, so `alembic` is not available inside the container.
 
 ### Docker Setup
 
@@ -123,37 +132,46 @@ docker-compose -f docker-compose.standalone.yml up -d
 /remind <time> [daily|weekly|monthly] [confirm] <message>
 ```
 
-Examples:
+In quick mode the time must be a **single word** — everything after that first
+word becomes the reminder text. Use interactive mode for multi-word times.
 
 ```
 /remind 09:00 daily Take vitamins
 /remind 2h Take a break
+/remind 5pm Buy milk
 /remind 10:30 confirm Call dentist
-/remind tomorrow at 3pm Team meeting
 /remind 15m @john @jane Project review
 ```
 
-### Inline Mode
+### Interactive Mode
 
-From any chat, type your bot's username followed by a time and message:
-
-```
-@your_bot 5pm Buy milk
-@your_bot tomorrow 10am Meeting
-```
+Send `/remind` with no arguments for guided step-by-step creation. Here the time
+is entered on its own, so the full range of formats below is available.
 
 ### Managing Reminders
 
-Every reminder message and the `/reminders` list come with inline buttons to confirm, snooze, reschedule, pause/resume, skip an occurrence, edit the message text, change the schedule, set an end date, configure lead-time alerts, or view history.
+When a reminder fires, its message carries buttons to confirm, snooze (including
+smart options like *Tomorrow 9am* and *Mon 9am*), reschedule, and view history.
+
+The full management view — edit the message text, change the schedule,
+pause/resume, skip the next occurrence, set an end date, and configure
+lead-time alerts — is reached from `/reminders` by picking a reminder.
 
 ### Time Formats
 
-- **Specific time**: `10:30`, `2:30 PM`
+Accepted anywhere a time is entered on its own (interactive mode, reschedule,
+change schedule):
+
+- **Specific time**: `10:30`, `10:30 PM`
 - **Relative time**: `30m`, `2h`, `1d`, `1w`
 - **Natural language**: `tomorrow at 3pm`, `next monday at 10am`
 - **Dates**: `June 26 at 5PM`, `12.07.2025 14:00` (European), `12/7/25 2PM` (US)
-- **Repeating**: add `daily`, `weekly`, `monthly`
-- **Confirmation**: add `confirm`
+
+In quick mode (`/remind <time> <message>`) only the single-word forms work:
+`10:30`, `5pm`, `2h`, `30m`, `1d`, `1w`.
+
+Add `daily`, `weekly` or `monthly` for a repeating reminder, and `confirm` to
+require explicit confirmation.
 
 ## Architecture
 

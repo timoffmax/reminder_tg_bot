@@ -2,11 +2,13 @@
 
 ## How Deployment Works
 
-Production deployment is handled by [`.github/workflows/deploy.yml`](workflows/deploy.yml). It runs on a **self-hosted GitHub Actions runner** installed on the production server itself, so no SSH secrets are required — the workflow operates directly on the local checkout.
+Production deployment is handled by [`.github/workflows/deploy.yml`](workflows/deploy.yml). It runs on a **self-hosted GitHub Actions runner** installed on the production server itself, so no SSH secrets are required — the workflow operates on the production directory on that same host.
 
-- **Trigger**: push to `master` (only for changes under `src/`, `requirements.txt`, `pyproject.toml`, `docker-compose.yml`, `Dockerfile`, `setup_db.py`), or manually via *Actions → Deploy Reminder Bot to Production → Run workflow* (with optional `force_deploy` / `restart_only` inputs)
+- **Trigger**: push to `master` (only for changes under `src/`, `requirements.txt`, `pyproject.toml`, `docker-compose.yml`, `Dockerfile`, `setup_db.py`), or manually via *Actions → Deploy Reminder Bot to Production → Run workflow* (with an optional `restart_only` input)
 - **Service**: the bot runs as a systemd service (default name: `reminder-bot`)
 - **Steps**: stop service → backup current version → `git reset --hard origin/master` → update dependencies → run `setup_db.py` → fix permissions → start and enable service → verify
+
+> **Before first use, edit the workflow to match your server.** `deploy.yml` hardcodes `PROJECT_PATH="/var/www/reminder_tg_bot"` and the OS user `reminder_bot` (used for `pip`, `setup_db.py` and `chown`); `scripts/reminder-bot.service` hardcodes the same path. Change all of them together, or use the paths below consistently.
 
 An alternative push-based deploy over SSH (no runner required) is available via the scripts in `bin/` — see [bin/setup-server.md](../bin/setup-server.md).
 
@@ -32,7 +34,14 @@ pip install -r requirements.txt
 # Configure environment
 cp .env.example .env
 # Edit .env: set BOT_TOKEN and DATABASE_URL
+
+# Create the schema, then mark it as up to date for Alembic
+python setup_db.py
+alembic stamp head
 ```
+
+The `alembic stamp head` step is required: the initial migration is empty, so an
+unstamped database breaks the first `alembic upgrade head` that `bin/deploy` runs.
 
 ### Step 2: Create the systemd Service
 
@@ -95,7 +104,9 @@ git clean -fd
 # Reinstall dependencies
 pip install -r requirements.txt --force-reinstall
 
-# Re-run database setup / migrations
+# Re-run database setup, then migrations.
+# On a database created by setup_db.py that was never stamped, run
+# `alembic stamp head` instead of `upgrade head` (see Server Setup).
 python setup_db.py
 alembic upgrade head
 ```

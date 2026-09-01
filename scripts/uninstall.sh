@@ -11,7 +11,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Default values
-APP_DIR="/var/www/reminder_bot"
+APP_DIR="/var/www/reminder_tg_bot"
 APP_USER="reminder_bot"
 DB_NAME="reminder_bot"
 DB_USER="reminder_bot"

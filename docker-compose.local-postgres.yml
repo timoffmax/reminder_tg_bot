@@ -1,5 +1,4 @@
 # Alternative docker-compose for using existing local PostgreSQL
-version: '3.8'
 
 services:
   bot:

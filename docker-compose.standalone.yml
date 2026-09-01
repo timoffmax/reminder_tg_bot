@@ -1,5 +1,4 @@
 # Docker compose with standalone PostgreSQL (for systems without existing PostgreSQL)
-version: '3.8'
 
 services:
   postgres:
