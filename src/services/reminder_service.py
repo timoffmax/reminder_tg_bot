@@ -251,12 +251,13 @@ class ReminderService:
         self._log_action(reminder_id, "completed")
         return True
 
-    def confirm_reminder(self, reminder_id: int) -> bool:
+    def confirm_reminder(self, reminder_id: int, has_pending_delivery: bool = True) -> bool:
         reminder = self.get_reminder_by_id(reminder_id)
         if not reminder or not reminder.requires_confirmation:
             return False
 
         cancelled_follow_up_ids = []
+        log_details = {}
 
         # Repeating reminders keep is_confirmed=False so the next occurrence
         # renders the Confirm keyboard again; clearing the request timestamp
@@ -276,13 +277,27 @@ class ReminderService:
                 follow_up.last_confirmation_request_at = None
                 cancelled_follow_up_ids.append(follow_up.id)
 
+            # A series still sitting on a past occurrence with no delivery job left
+            # was never advanced (its delivery failed). Clearing the request timestamp
+            # alone would let the overdue check fall back to that past scheduled_time
+            # and nag again.
+            if (not has_pending_delivery) and self._is_stuck_on_past_occurrence(reminder):
+                self._reschedule_repeating_reminder(reminder)
+                log_details["advanced_past_occurrence"] = True
+
         reminder.last_confirmation_request_at = None
         self.db.commit()
-        self._log_action(reminder_id, "confirmed")
+        self._log_action(reminder_id, "confirmed", log_details)
 
         for follow_up_id in cancelled_follow_up_ids:
             self._log_action(follow_up_id, "cancelled", {"confirmed_parent": reminder_id})
         return True
+
+    @staticmethod
+    def _is_stuck_on_past_occurrence(reminder: Reminder) -> bool:
+        now = datetime.now(pytz.UTC).replace(tzinfo=None)
+        is_active = reminder.status == ReminderStatus.ACTIVE.value
+        return is_active and reminder.scheduled_time <= now
 
     def cancel_reminder(self, reminder_id: int) -> bool:
         reminder = self.get_reminder_by_id(reminder_id)

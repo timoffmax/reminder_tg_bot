@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from src.database import SessionLocal
 from src.services.reminder_service import ReminderService
-from src.services.scheduler_service import build_snooze_buttons
+from src.services.scheduler_service import build_snooze_buttons, confirm_reminder_and_reschedule
 from src.services.user_service import UserService
 from src.utils.timezone_utils import get_timezone_regions, convert_to_user_timezone
 
@@ -465,9 +465,11 @@ What would you like to do?
             is_repeating = reminder.reminder_type == "repeating"
 
             if is_repeating:
-                # For repeating reminders, next occurrence is already scheduled when fired;
-                # confirming stops the re-sends for the fired occurrence.
-                reminder_service.confirm_reminder(reminder_id)
+                # For repeating reminders, next occurrence is already scheduled when fired
+                # (or gets scheduled now if that delivery failed); confirming stops the
+                # re-sends for the fired occurrence.
+                scheduler_service = context.bot_data.get('scheduler_service')
+                confirm_reminder_and_reschedule(scheduler_service, reminder_service, reminder_id)
                 await query.edit_message_text("✅ Reminder confirmed! Next occurrence is already scheduled.")
             else:
                 # For one-time reminders, confirm and complete
@@ -492,7 +494,8 @@ What would you like to do?
                 # For repeating reminders, next occurrence is already scheduled when fired;
                 # acknowledging stops any pending confirmation re-sends.
                 if reminder.requires_confirmation:
-                    reminder_service.confirm_reminder(reminder_id)
+                    scheduler_service = context.bot_data.get('scheduler_service')
+                    confirm_reminder_and_reschedule(scheduler_service, reminder_service, reminder_id)
                 await query.edit_message_text("✅ Reminder completed! Next occurrence is already scheduled.")
             else:
                 # For one-time reminders, mark as completed

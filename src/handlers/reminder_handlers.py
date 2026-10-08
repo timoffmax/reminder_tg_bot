@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 from dateutil.relativedelta import relativedelta
 from src.database import SessionLocal
 from src.services.reminder_service import ReminderService
+from src.services.scheduler_service import confirm_reminder_and_reschedule
 from src.services.user_service import UserService
 from src.models.reminder import ReminderType
 from src.utils.timezone_utils import parse_time_input, convert_to_user_timezone, parse_recurring_pattern
@@ -380,7 +381,11 @@ async def confirm_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update.effective_user.id,
             update.effective_chat.id,
         ) is not None
-        success = reminder_service.confirm_reminder(reminder_id) if authorized else False
+        scheduler_service = context.bot_data.get('scheduler_service')
+        success = False
+
+        if authorized:
+            success = confirm_reminder_and_reschedule(scheduler_service, reminder_service, reminder_id)
 
     if success:
         await update.message.reply_text(f"✅ Reminder {reminder_id} confirmed.")
